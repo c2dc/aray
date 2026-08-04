@@ -1,0 +1,35 @@
+[build-system]
+requires = ["hatchling"]
+build-backend = "hatchling.build"
+
+[project]
+name = "aray"
+version = "0.1.0"
+description = "Add your description here"
+requires-python = ">=3.12"
+dependencies = [
+    "ipython>=9.10.0",
+    "langchain-openai>=1.1.7",
+    "langgraph>=1.0.8",
+    "python-dotenv>=1.0.0",
+]
+
+[dependency-groups]
+dev = [
+    "pytest>=9.0.2",
+]
+
+[project.scripts]
+aray = "aray.cli:main"
+aray-eval = "aray.evaluator:main"
+aray-normalize = "aray.normalizer:main"
+
+[tool.uv]
+package = true
+
+[tool.pytest.ini_options]
+pythonpath = ["."]
+markers = [
+    "llm: end-to-end tests that make real LLM API calls (deselect with '-m not llm')",
+    "no_structured_output: LLM tests that exercise the prompt-based JSON fallback path",
+]

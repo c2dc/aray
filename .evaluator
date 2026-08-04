@@ -1,0 +1,63 @@
+[evaluator]
+# Configuration precedence is:
+#   command-line option > this file > environment variable > built-in default
+# A shared value in this file also overrides role-specific environment values.
+# For example, model below overrides OPENAI_MODEL, NORMALIZE_MODEL, and
+# EXTRACT_MODEL. A role-specific value in this file still overrides its shared
+# counterpart.
+
+# Directories to walk recursively for .yar files. Paths may be relative to the
+# current working directory or absolute. Positional CLI directories replace
+# this entire list.
+#directories = [
+#    "evaluation/normalized/cve_rules",
+#    "evaluation/normalized/antidebug_antivm",
+#    "evaluation/normalized/crypto",
+#    "evaluation/normalized/email",
+#    "evaluation/normalized/malware",
+#    "evaluation/normalized/packers",
+#    "evaluation/normalized/exploit_kits",
+#    "evaluation/normalized/webshells",
+#]
+
+directories = [
+    "evaluation/rules/cve_rules",
+    "evaluation/rules/antidebug_antivm",
+    "evaluation/rules/crypto",
+    "evaluation/rules/email",
+    "evaluation/rules/malware",
+    "evaluation/rules/packers",
+    "evaluation/rules/exploit_kits",
+    "evaluation/rules/webshells",
+]
+
+# Shared LLM settings for normalization and extraction. These override
+# OPENAI_MODEL and OPENAI_BASE_URL as well as the role-specific environment
+# variables when no role-specific TOML value is set.
+model = "glm-5.2:cloud"
+base_url = "http://localhost:11434/v1"
+
+# Optional role-specific settings. They correspond to the main aray CLI roles
+# and override the shared TOML values above.
+# normalize_model = "gpt-4.1"
+# extract_model = "gpt-4.1-mini"
+# normalize_base_url = "https://api.openai.com/v1"
+# extract_base_url = "http://localhost:11434/v1"
+
+# Optional credentials override NORMALIZE_API_KEY / EXTRACT_API_KEY and then
+# OPENAI_API_KEY. Keep real secrets out of version control. API keys are never
+# printed or written to evaluation reports.
+# normalize_api_key = "sk-..."
+# extract_api_key = "not-needed"
+
+# Disable streaming globally or for one role. Each role inherits the global
+# setting unless its matching no_stream key is true.
+# no_stream = false
+# normalize_no_stream = false
+# extract_no_stream = false
+
+# Artifact and execution controls.
+# scan_only = false
+# workers = 1                 # parallel rule evaluations
+# output = "report.json"      # default: timestamped evaluation/reports path
+# keep_artifacts = false

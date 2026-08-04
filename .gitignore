@@ -1,0 +1,9 @@
+.env
+build/
+.idea/
+.venv/
+.vscode/
+__pycache__/
+tmp/
+data/templates/linux/test/teste
+evaluation/

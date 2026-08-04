@@ -1,0 +1,42 @@
+[normalizer]
+# Configuration precedence is:
+#   command-line option > this file > environment variable > built-in default
+# Values in this file override NORMALIZE_* and OPENAI_* variables loaded from
+# the process environment or .env.
+
+# Directories to walk recursively for .yar files. Positional CLI directories
+# replace this entire list.
+directories = [
+    "evaluation/rules/cve_rules",
+    "evaluation/rules/antidebug_antivm",
+    "evaluation/rules/crypto",
+    "evaluation/rules/email",
+    "evaluation/rules/malware",
+    "evaluation/rules/packers",
+    "evaluation/rules/exploit_kits",
+    "evaluation/rules/webshells",
+]
+
+# Normalized rules are written below this root while preserving each input
+# directory's relative structure.
+output_root = "evaluation/normalized-new"
+
+# Normalize settings override NORMALIZE_MODEL / NORMALIZE_BASE_URL and then
+# OPENAI_MODEL / OPENAI_BASE_URL.
+#model = "glm-5.2:cloud"
+#base_url = "http://localhost:11434/v1"
+
+# The judge inherits model, base_url, and normalize_api_key when its matching
+# option is omitted. Set judge_* to evaluate with a separate provider/model.
+#judge_model = "glm-5.2:cloud"
+# judge_base_url = "https://api.openai.com/v1"
+
+# Optional credentials override NORMALIZE_API_KEY and OPENAI_API_KEY. Keep real
+# secrets out of version control. Keys are never printed or written to reports.
+# normalize_api_key = "not-needed"
+# judge_api_key = "sk-..."
+
+# Runtime and report controls.
+# no_stream = false
+# workers = 1                    # parallel normalization requests
+# output = "norm_report.json"   # default: timestamped evaluation/reports path
