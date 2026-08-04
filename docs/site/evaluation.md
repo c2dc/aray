@@ -309,10 +309,10 @@ An input such as `evaluation/rules/cve_rules/Foo.yar` is written as `evaluation/
 
 The normalized file is retained even when the judge returns `failed` or `uncertain`, making the output available for inspection and dataset work.
 
-Judge criteria include pattern preservation, modifier preservation, YARA syntax, and simplicity:
+Retained regex replacements are validated deterministically with `yara-python` before the LLM judge runs. Judge criteria then include subset correctness, modifier preservation, YARA syntax, and construction cost:
 
-- `passed`: accepted as semantically equivalent and valid;
-- `failed`: patterns or semantics were lost, or syntax is invalid;
+- `passed`: accepted as a valid constructible subset of the original;
+- `failed`: the rule is not a valid subset, has invalid syntax, or chooses a clearly more expensive branch when a cheaper constructible alternative exists;
 - `uncertain`: treated as a failed quality result by the batch normalizer.
 
 ## Test Strategy

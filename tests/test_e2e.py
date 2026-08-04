@@ -144,6 +144,35 @@ class TestE2ELinux:
         assert result.returncode == 0
         assert "rule1" in result.stdout
 
+    def test_rule10_prefers_cheaper_or_branch(self, tmp_path):
+        """rule10: normalization avoids the tight-size PE branch."""
+        rule = RULES_DIR / "rule10.yar"
+        linux_dir, windows_dir = _invoke(rule, tmp_path)
+        normalized = (linux_dir / "normalized_rule.yar").read_text()
+
+        assert (linux_dir / "app").exists(), "ELF binary not created"
+        assert not (windows_dir / "app.exe").exists(), "expensive PE branch was selected"
+        assert "$s3" in normalized
+        assert "$s4" in normalized
+        assert "$x1" not in normalized
+        assert "uint16(0)" not in normalized
+        assert "filesize" not in normalized
+
+        result = _yara_scan(rule, linux_dir / "app")
+        assert result.returncode == 0
+        assert "Mal_PotPlayer_DLL" in result.stdout
+
+    def test_rule11_regex_replacement_matches_original(self, tmp_path):
+        """rule11: the fixed regex witness must satisfy the original regex."""
+        rule = RULES_DIR / "rule11.yar"
+        linux_dir, _ = _invoke(rule, tmp_path)
+        normalized = (linux_dir / "normalized_rule.yar").read_text()
+
+        assert "52006F006F007400200045006E007400720079" in normalized
+        result = _yara_scan(rule, linux_dir / "app")
+        assert result.returncode == 0
+        assert "CVE_2012_0158_KeyBoy" in result.stdout
+
     def test_linux_build_artefacts_created(self, tmp_path):
         """Pipeline writes all expected build artefacts for a Linux rule."""
         rule = RULES_DIR / "rule0.yar"

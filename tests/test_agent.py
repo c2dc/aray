@@ -28,7 +28,7 @@ from aray.codegen import (
 from aray.compiler import _parse_filesize_constraint, _patch_constants, compile_binary
 from aray.nodes import _requires_normalization, check_normalization_needed, extract_constants, extract_strings, fail_normalization, normalize_rule, read_yara_rule, route_file_type, write_generic
 from aray.evaluator import EvalConfig, _run_one
-from aray.cli import parse_args
+from aray.cli import _clean_build_outputs, parse_args
 
 RULES_DIR = Path("data/rules")
 
@@ -2211,6 +2211,20 @@ class TestEvaluatorRunOne:
 # CLI
 # ---------------------------------------------------------------------------
 class TestCli:
+    def test_clean_build_outputs_removes_all_backend_artifacts(self, tmp_path, monkeypatch):
+        build_dirs = [tmp_path / "linux", tmp_path / "windows", tmp_path / "generic"]
+        for build_dir in build_dirs:
+            build_dir.mkdir()
+            (build_dir / "stale-artifact").write_bytes(b"stale")
+
+        monkeypatch.setattr("aray.cli.BUILD_DIR", build_dirs[0])
+        monkeypatch.setattr("aray.cli.BUILD_DIR_WIN", build_dirs[1])
+        monkeypatch.setattr("aray.cli.BUILD_DIR_GENERIC", build_dirs[2])
+
+        _clean_build_outputs()
+
+        assert all(not build_dir.exists() for build_dir in build_dirs)
+
     def test_no_rule_path_prints_help_and_exits_zero(self, capsys):
         """Bare invocation shows help and exits 0 instead of an argparse error."""
         with pytest.raises(SystemExit) as excinfo:

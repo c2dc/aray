@@ -71,6 +71,9 @@ All notable changes to this project will be documented in this file.
 
 ### Fixed
 
+#### Stale artifacts from previous backend runs
+- **CLI build cleanup** (`aray/cli.py`): removes `build/linux`, `build/windows`, and `build/generic` immediately before pipeline invocation so the build tree represents only the current run. This prevents an old PE result from appearing current after normalization selects an ELF branch, or vice versa.
+
 #### Architecture diagram URL
 - **Nested-page image path** (`docs/site/architecture.md`): uses Markdown image rendering so MkDocs rewrites the diagram URL correctly for the `/aray/architecture/` route instead of requesting it below `/aray/architecture/diagrams/`.
 
@@ -156,7 +159,7 @@ All notable changes to this project will be documented in this file.
 - **`aray-normalize` batch runner** (`aray/normalizer.py`): `_run_one` now extracts the first rule from the file before normalizing and before passing to the LLM judge. The output file contains only the normalized single rule.
 
 #### New sample rules
-- **`rule10.yar`** (`Mal_PotPlayer_DLL`, CVE-2015-2545): Windows PE rule with MZ header check and fullword ASCII strings containing backslash paths (`\\update.dat`) — exercises the C string backslash-escaping fix in `_escape_c_string()`.
+- **`rule10.yar`** (`Mal_PotPlayer_DLL`, CVE-2015-2545): rule with a tight-size PE branch and an alternative fullword-string branch containing backslash paths (`\\update.dat`); normalization selects the cheaper string branch under YARA precedence.
 - **`rule11.yar`** (`CVE_2012_0158_KeyBoy`, CVE-2012-0158): Linux ELF rule with a regex string (`$c`) and an `all of them` condition — exercises the `normalize_rule` judge-retry loop (regex replaced with a literal, variable kept, `all of them` preserved).
 
 ### Changed
@@ -170,9 +173,15 @@ All notable changes to this project will be documented in this file.
 
 #### Normalize prompt improvements
 - **Rule 1** now explicitly states that when replacing a regex, the same variable name must be kept (do not remove the variable). This prevents the LLM from silently dropping a variable that is referenced by `all of them`.
-- **Rule 7 (new)**: if a string variable must be removed, `all of them` / `any of them` must be rewritten as an explicit `and`/`or`-joined list of the remaining variable names.
+- **Rule 7 (new)**: if a string variable must be removed, quantified references must be rewritten to use only required retained variables; `any of them` selects one witness instead of preserving an OR.
 - **Second example** added to the normalize prompt demonstrating regex replacement while preserving the variable and the `all of them` condition.
 - **Judge system prompt** updated to include rule 7 so the judge does not incorrectly mark as `failed` a normalization that correctly rewrites `all of them` after dropping a variable.
+- **Constructible-subset contract** (`aray/nodes.py`, `aray/models.py`): normalization now explicitly requires implication in one direction (`normalized match => original match`) instead of incorrectly claiming bidirectional equivalence when selecting one OR branch.
+- **Precedence-aware OR selection**: prompts now state YARA's `not` > `and` > `or` precedence, require complete branches, expand quantified string sets before comparison, and forbid carrying constraints across discarded alternatives.
+- **Construction-cost ranking**: branch selection prioritizes feasibility, then avoids tight maximum sizes, large padding requirements, high exact offsets, format-forcing PE/nested/wide requirements, and excess evidence. The judge rejects clearly more expensive choices and feeds the cheaper branch back into retries.
+- **`rule10.yar` regression**: documents and tests selection of `$s3 and $s4` over the `(MZ and filesize < 2KB and $x1)` branch, producing an ELF artifact that still matches the original rule.
+- **Deterministic regex-witness validation** (`aray/yara_validation.py`): retained regex variables replaced by fixed literals are compiled and checked with `yara-python` before the LLM judge runs. Invalid witnesses return actionable retry feedback and cannot be accepted merely because they are non-empty.
+- **`rule11.yar` regression**: the normalizer prompt now includes the exact shortest witness `52006F006F007400200045006E007400720079`; unit and real-LLM tests verify that the generated ELF matches the original regex rule.
 
 #### GNU assembler codegen (Linux ELF path)
 - **`_generate_asm_source()`** replaces `_generate_c_source()`: Linux strings are converted to raw bytes and emitted as `.section .sec_0xNNN,"aw",@progbits` + `.byte` directives in a GNU assembler source file (`main.S`). This guarantees deterministic byte placement; C compiler string folding, reordering, and alignment padding cannot interfere.

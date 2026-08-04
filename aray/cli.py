@@ -2,12 +2,14 @@
 
 import argparse
 import os
+import shutil
 import sys
 from pathlib import Path
 
 from dotenv import load_dotenv
 
 from aray.config import LLMNodeConfig, PipelineConfig
+from aray.constants import BUILD_DIR, BUILD_DIR_GENERIC, BUILD_DIR_WIN
 from aray.graph import build_graph, save_graph_png
 
 
@@ -106,6 +108,12 @@ def parse_args(argv: list[str] | None = None) -> argparse.Namespace:
     return args
 
 
+def _clean_build_outputs() -> None:
+    """Remove artifacts from previous CLI runs before generating new output."""
+    for build_dir in (BUILD_DIR, BUILD_DIR_WIN, BUILD_DIR_GENERIC):
+        shutil.rmtree(build_dir, ignore_errors=True)
+
+
 def main() -> None:
     load_dotenv()
     args = parse_args()
@@ -154,4 +162,5 @@ def main() -> None:
         save_graph_png(graph)
         print("Graph saved to react_graph.png")
 
+    _clean_build_outputs()
     graph.invoke({"name": "aray", "rule_path": str(args.rule_path.resolve())})

@@ -65,6 +65,10 @@ Otherwise the original text becomes `normalized_rule` unchanged. This skips norm
 
 `normalize_rule` asks the normalization model to produce a simpler rule in the supported subset. `judge_rule` compares that result with the original.
 
+Normalization produces a constructible subset, not a bidirectionally equivalent rule: every normalized match must satisfy the original, but selecting one complete `or` branch may intentionally match fewer files. Branches are grouped using YARA precedence (`not`, then `and`, then `or`) before simplification, so conditions are never carried across alternatives.
+
+When several branches are valid, the normalizer prioritizes construction feasibility and cost. It avoids tight maximum file sizes that compiled artifacts cannot satisfy, large minimum or exact sizes that require padding, high exact offsets, format-forcing PE or wide-string requirements, and then excess strings, constants, and literal bytes. Before the LLM judge runs, every retained regex replacement is compiled with `yara-python` and scanned against its proposed fixed literal. An invalid witness is rejected deterministically and returned as feedback for the next attempt. The judge then rejects structurally invalid or clearly more expensive branches.
+
 - `passed`: continue to extraction.
 - `uncertain`: currently continue to extraction.
 - `failed`: retry normalization with feedback.

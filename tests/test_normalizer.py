@@ -8,7 +8,9 @@ from unittest.mock import MagicMock, patch
 
 import pytest
 
-from aray.models import JudgeVerdict
+from aray.models import JudgeVerdict, NormalizedYaraRule
+from aray.nodes import judge_rule, normalize_rule
+from aray.yara_validation import validate_regex_replacements
 from aray.normalizer import (
     NormConfig,
     NormResult,
@@ -137,6 +139,127 @@ class TestNormResultToDict:
 
 
 # ---------------------------------------------------------------------------
+# normalize_rule prompt and retries
+# ---------------------------------------------------------------------------
+
+class TestNormalizeRulePrompt:
+    _RULE10_CONDITION = (
+        "uint16(0) == 0x5a4d and filesize < 2KB and $x1 or all of ($s*)"
+    )
+
+    def test_prompt_explains_precedence_and_construction_cost(self):
+        captured_messages = []
+
+        def _capture_invoke(llm, schema, messages, use_structured):
+            captured_messages.extend(messages)
+            return NormalizedYaraRule(rule="rule R { condition: true }")
+
+        llm = MagicMock()
+        llm.model_name = "test-model"
+        with patch("aray.nodes._invoke_llm", side_effect=_capture_invoke):
+            normalize_rule(
+                {"yara_rule": f"rule R {{ condition: {self._RULE10_CONDITION} }}"},
+                llm,
+            )
+
+        sys_content = captured_messages[0].content
+        assert "minimal constructible subset" in sys_content
+        assert "`not`, then `and`, then `or`" in sys_content
+        assert "`A and B or C` means `(A and B) or C`" in sys_content
+        assert "cheapest constructible branch" in sys_content
+        assert "compiled artifact cannot be shrunk" in sys_content
+        assert "allocating and writing padding bytes" in sys_content
+        assert "exact string offsets" in sys_content
+        assert "format-forcing requirements" in sys_content
+        assert self._RULE10_CONDITION in sys_content
+        assert "Remove $x1, the MZ check, and the filesize bound" in sys_content
+        assert "52006F006F007400200045006E007400720079" in sys_content
+        assert "Do NOT decode or reinterpret hex-looking regex text" in sys_content
+
+    def test_retry_includes_expensive_branch_feedback(self):
+        original = f"rule R {{ condition: {self._RULE10_CONDITION} }}"
+        expensive = "rule R { strings: $x1 = \"x\" condition: uint16(0) == 0x5a4d and filesize < 2KB and $x1 }"
+        cheap = "rule R { strings: $s3 = \"a\" $s4 = \"b\" condition: $s3 and $s4 }"
+        responses = iter([
+            NormalizedYaraRule(rule=expensive),
+            JudgeVerdict(
+                verdict="failed",
+                reason="Choose the cheaper complete $s3 and $s4 branch.",
+            ),
+            NormalizedYaraRule(rule=cheap),
+        ])
+        captured_messages = []
+
+        def _scripted_invoke(llm, schema, messages, use_structured):
+            captured_messages.append(messages)
+            return next(responses)
+
+        llm = MagicMock()
+        llm.model_name = "test-model"
+        with patch("aray.nodes._invoke_llm", side_effect=_scripted_invoke):
+            state = {"yara_rule": original}
+            state.update(normalize_rule(state, llm))
+            state.update(judge_rule(state, llm))
+            result = normalize_rule(state, llm)
+
+        retry_message = captured_messages[2][1].content
+        assert result["normalized_rule"] == cheap
+        assert expensive in retry_message
+        assert "Choose the cheaper complete $s3 and $s4 branch." in retry_message
+        assert "Normalize the ORIGINAL RULE again" in retry_message
+
+
+# ---------------------------------------------------------------------------
+# deterministic regex witness validation
+# ---------------------------------------------------------------------------
+
+class TestRegexWitnessValidation:
+    _VALID_WITNESS = "52006F006F007400200045006E007400720079"
+    _INVALID_WITNESS = (
+        "52006F007400200045006E0074002000730079007400650078002000760062006100"
+        "7200740020004E0061006D006500"
+    )
+
+    @staticmethod
+    def _rule11_with_literal(value: str) -> tuple[str, str]:
+        original = Path("data/rules/rule11.yar").read_text()
+        lines = []
+        for line in original.splitlines():
+            if line.strip().startswith("$c = /"):
+                lines.append(f'      $c = "{value}" nocase')
+            else:
+                lines.append(line)
+        return original, "\n".join(lines)
+
+    def test_rule11_valid_witness_is_accepted(self):
+        original, normalized = self._rule11_with_literal(self._VALID_WITNESS)
+        assert validate_regex_replacements(original, normalized) is None
+
+    def test_rule11_invalid_witness_is_rejected(self):
+        original, normalized = self._rule11_with_literal(self._INVALID_WITNESS)
+        error = validate_regex_replacements(original, normalized)
+        assert error is not None
+        assert "$c" in error
+        assert "does not match the original YARA regex" in error
+
+    def test_escaped_slash_regex_witness_is_accepted(self):
+        original = r'rule R { strings: $a = /foo\/bar/ condition: $a }'
+        normalized = r'rule R { strings: $a = "foo/bar" condition: $a }'
+        assert validate_regex_replacements(original, normalized) is None
+
+    def test_invalid_witness_bypasses_llm_judge(self):
+        original, normalized = self._rule11_with_literal(self._INVALID_WITNESS)
+        with patch("aray.nodes._invoke_llm") as mock_invoke:
+            verdict = _judge_normalization(
+                original, normalized, MagicMock(), use_structured=True
+            )
+
+        assert verdict.verdict == "failed"
+        assert "Regex witness validation failed for $c" in verdict.reason
+        mock_invoke.assert_not_called()
+
+
+# ---------------------------------------------------------------------------
 # _judge_normalization
 # ---------------------------------------------------------------------------
 
@@ -182,6 +305,14 @@ class TestJudgeNormalization:
         # Subset semantics must be explicit in the prompt
         assert "SUBSET" in sys_content
         assert "OR" in sys_content
+        assert "`not`, then `and`, then `or`" in sys_content
+        assert "cheapest constructible branch" in sys_content
+        assert "filesize" in sys_content
+        assert "exact offsets" in sys_content
+        assert "format-forcing PE/nested/wide" in sys_content
+        assert "uint16(0) == 0x5a4d" in sys_content
+        assert "preferred normalization is `$s3 and $s4`" in sys_content
+        assert "validated deterministically" in sys_content
 
     def test_human_message_contains_both_rules(self):
         expected = JudgeVerdict(verdict="failed", reason="Missing string.")

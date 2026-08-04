@@ -163,8 +163,8 @@ Read [Architecture](docs/site/architecture.md) for the layout contracts, routing
 
 Aray keeps the nondeterministic boundary narrow and explicit:
 
-- **Normalization:** complex YARA constructs are simplified into the subset supported by the backends. A deterministic pre-check skips this phase for already-supported rules. In the 416-rule evaluation, 179 rules (43%) skipped normalization, though they still used structured extraction.
-- **Judging:** a model compares a normalized rule with the original. A failed verdict retries normalization up to three times; three failures stop the pipeline before extraction or construction. An `uncertain` verdict currently proceeds.
+- **Normalization:** complex YARA constructs are simplified into a constructible subset supported by the backends. For `or` conditions, YARA precedence is preserved and complete branches are ranked by feasibility, filesize/padding cost, offset and format constraints, and required evidence. A deterministic pre-check skips this phase for already-supported rules. In the 416-rule evaluation, 179 rules (43%) skipped normalization, though they still used structured extraction.
+- **Judging:** retained regex replacements are first tested against the original pattern with `yara-python`; a model then verifies subset correctness and rejects clearly more expensive branches when a cheaper constructible alternative exists. A failed verdict retries normalization up to three times; three failures stop the pipeline before extraction or construction. An `uncertain` verdict currently proceeds.
 - **Structured extraction:** the model returns strings, formats, offsets, and integer checks through Pydantic schemas. Structured output is attempted first, with a validated prompt-based JSON fallback for models without tool-call support.
 
 Schema validation guarantees structure, not semantic correctness. Extraction mistakes remain possible, which is why corpus evaluation uses the YARA engine as an external oracle. Different models can be assigned to normalization and extraction, including local OpenAI-compatible models.

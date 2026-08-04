@@ -9,7 +9,11 @@ class JudgeVerdict(BaseModel):
     """LLM-as-judge assessment of a normalized YARA rule."""
 
     verdict: Literal["passed", "failed", "uncertain"] = Field(
-        description="passed = semantically equivalent and valid; failed = wrong or lossy; uncertain = cannot determine."
+        description=(
+            "passed = valid constructible subset of the original; failed = invalid, "
+            "not a subset, or needlessly selects a clearly more expensive branch; "
+            "uncertain = cannot determine."
+        )
     )
     reason: str = Field(description="One-sentence explanation of the verdict.")
 
@@ -17,7 +21,12 @@ class JudgeVerdict(BaseModel):
 class NormalizedYaraRule(BaseModel):
     """A normalized YARA rule."""
 
-    rule: str = Field(description="The normalized YARA rule.")
+    rule: str = Field(
+        description=(
+            "A minimal constructible YARA subset: every match of this rule must "
+            "also match the original, though it may match fewer files."
+        )
+    )
 
 
 class YaraStringEntry(BaseModel):

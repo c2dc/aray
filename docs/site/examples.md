@@ -64,8 +64,8 @@ Aray builds a low-alignment PE in two passes. The first build discovers where Mi
 | `rule7.yar` | PE | Nested PE-signature check |
 | `rule8.yar` | PE | Numeric `N of` normalization |
 | `rule9.yar` | PE | ASCII and YARA `wide` strings |
-| `rule10.yar` | PE | Backslash escaping in C source |
-| `rule11.yar` | ELF | Regex normalization and judge retries |
+| `rule10.yar` | ELF | OR precedence and construction-cost-aware branch selection |
+| `rule11.yar` | ELF | Regex witness validation and normalization retries |
 | `rule12.yar` | PE | Runnable PE string at an exact offset |
 
 The complete source catalog is available under [`data/rules`](https://github.com/c2dc/aray/tree/main/data/rules).

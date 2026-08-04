@@ -12,6 +12,7 @@ dependencies = [
     "langchain-openai>=1.1.7",
     "langgraph>=1.0.8",
     "python-dotenv>=1.0.0",
+    "yara-python>=4.5.0",
 ]
 
 [dependency-groups]
