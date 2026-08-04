@@ -1,0 +1,34 @@
+Institutional logo sources
+==========================
+
+Downloaded on 2026-08-04 from official institutional sources.
+
+Aeronautics Institute of Technology (ITA)
+- File: ita.jpg
+- Homepage: https://www.ita.br/
+- Source: https://www.biblioteca.ita.br/wafx_res/Files/LOGO_MANUAL_IDENTIDADE.zip
+- Package file: LOGO_IMAGENS.zip/logomarca arquivos de imagem/ita_rgb.jpg
+- Note: The identity package designates the RGB file for electronic media.
+
+University of Sao Paulo (USP)
+- File: usp.png
+- Homepage: https://www5.usp.br/
+- Brand page: https://scs.usp.br/identidadevisual/logotipos/
+- Source: https://scs.usp.br/identidadevisual/wp-content/uploads/2022/08/usp-logo-png-1.png
+
+iFood
+- File: ifood.svg
+- Homepage: https://institucional.ifood.com.br/
+- Brand page: https://brand.ifood.com.br/downloads
+- Source: https://institucional.ifood.com.br/wp-content/uploads/2023/09/ifood-logo.svg
+
+Texas A&M University (TAMU)
+- File: tamu.svg
+- Homepage: https://www.tamu.edu/
+- Brand page: https://marcomm.tamu.edu/template/logo-downloads/
+- Source: https://aux.tamu.edu/logos/boxTAM.svg
+- Note: The official mark must not be altered, cropped, recolored, or rearranged.
+
+All institutional names and marks remain the property of their respective
+owners. Inclusion identifies research collaboration and does not grant a
+general license to reuse the marks.

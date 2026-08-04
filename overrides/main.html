@@ -15,3 +15,42 @@
   <meta name="twitter:description" content="{{ page_description }}">
   <meta name="twitter:image" content="{{ config.site_url }}aray-logo.png">
 {% endblock %}
+
+{% block footer %}
+  <section class="aray-institutions" aria-labelledby="aray-institutions-title">
+    <div class="aray-institutions__inner md-grid">
+      <p class="aray-institutions__kicker">Research collaboration</p>
+      <h2 id="aray-institutions-title">Built across academia and industry</h2>
+      <p class="aray-institutions__intro">
+        Aray is a research project from the Laboratory of Command and Control and Cyber-security (Lab-C2DC), developed through a collaboration involving:
+      </p>
+      <div class="aray-institutions__grid">
+        <a class="aray-institution" href="https://www.ita.br/">
+          <span class="aray-institution__logo">
+            <img class="aray-institution__logo--ita" src="{{ 'assets/institutions/ita.jpg' | url }}" alt="Aeronautics Institute of Technology (ITA) logo" loading="lazy">
+          </span>
+          <span>Aeronautics Institute of Technology (ITA)</span>
+        </a>
+        <a class="aray-institution" href="https://www5.usp.br/">
+          <span class="aray-institution__logo">
+            <img class="aray-institution__logo--usp" src="{{ 'assets/institutions/usp.png' | url }}" alt="University of São Paulo (USP) logo" loading="lazy">
+          </span>
+          <span>University of São Paulo (USP)</span>
+        </a>
+        <a class="aray-institution" href="https://institucional.ifood.com.br/">
+          <span class="aray-institution__logo">
+            <img class="aray-institution__logo--ifood" src="{{ 'assets/institutions/ifood.svg' | url }}" alt="iFood logo" loading="lazy">
+          </span>
+          <span>iFood</span>
+        </a>
+        <a class="aray-institution" href="https://www.tamu.edu/">
+          <span class="aray-institution__logo">
+            <img class="aray-institution__logo--tamu" src="{{ 'assets/institutions/tamu.svg' | url }}" alt="Texas A&amp;M University (TAMU) logo" loading="lazy">
+          </span>
+          <span>Texas A&amp;M University (TAMU)</span>
+        </a>
+      </div>
+    </div>
+  </section>
+  {{ super() }}
+{% endblock %}
