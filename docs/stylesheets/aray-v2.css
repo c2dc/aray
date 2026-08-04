@@ -249,8 +249,8 @@
   gap: 0.8rem;
   justify-content: space-between;
   line-height: 1.35;
-  min-height: 8.5rem;
-  padding: 1rem;
+  min-height: 6.8rem;
+  padding: 0.8rem;
   text-decoration: none;
   transition: border-color 150ms ease, box-shadow 150ms ease;
 }
@@ -265,32 +265,34 @@
 .aray-institution__logo {
   align-items: center;
   display: flex;
-  height: 4.4rem;
+  height: 3.2rem;
   justify-content: center;
   width: 100%;
 }
 
 .aray-institution__logo img {
   display: block;
+  height: auto;
   max-height: 100%;
   max-width: 100%;
   object-fit: contain;
+  width: auto;
 }
 
 .aray-institution__logo--ita {
-  width: 10rem;
+  max-width: 7rem;
 }
 
 .aray-institution__logo--usp {
-  height: 5.6rem;
+  max-width: 5.6rem;
 }
 
 .aray-institution__logo--ifood {
-  width: 5.8rem;
+  max-width: 4rem;
 }
 
 .aray-institution__logo--tamu {
-  height: 4rem;
+  max-height: 2.6rem;
 }
 
 @media screen and (max-width: 48rem) {

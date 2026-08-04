@@ -52,7 +52,7 @@ markdown_extensions:
   - pymdownx.superfences
 
 extra_css:
-  - stylesheets/extra.css
+  - stylesheets/aray-v2.css
 
 extra:
   social:

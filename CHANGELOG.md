@@ -9,7 +9,7 @@ All notable changes to this project will be documented in this file.
 #### Project website and GitHub Pages deployment
 - **MkDocs Material website** (`mkdocs.yml`, `docs/index.md`): responsive project landing page with quick start, architecture boundary, artifact backends, published evaluation results, and research affiliation.
 - **Search and discovery metadata** (`overrides/main.html`, `docs/robots.txt`): canonical URLs, Open Graph and Twitter metadata, sitemap discovery, and built-in documentation search.
-- **Examples and custom presentation** (`docs/examples.md`, `docs/stylesheets/extra.css`): focused ELF/PE workflows, the complete sample catalog, and a responsive white-and-red visual system inspired by the iFood palette.
+- **Examples and custom presentation** (`docs/examples.md`, `docs/stylesheets/aray-v2.css`): focused ELF/PE workflows, the complete sample catalog, and a responsive white-and-red visual system inspired by the iFood palette.
 - **Institutional collaboration footer** (`overrides/main.html`, `docs/assets/institutions/`): official ITA, USP, iFood, and Texas A&M University marks, full institution names, source provenance, and responsive links on every documentation page.
 - **GitHub Pages workflow** (`.github/workflows/pages.yml`): strict MkDocs build and deployment to `https://c2dc.github.io/aray/` using commit-pinned GitHub Actions.
 
