@@ -11,7 +11,7 @@ dependencies = [
     "ipython>=9.10.0",
     "langchain-openai>=1.1.7",
     "langgraph>=1.0.8",
-    "python-dotenv>=1.0.0",
+    "python-dotenv>=1.2.2",
 ]
 
 [dependency-groups]
