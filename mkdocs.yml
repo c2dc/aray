@@ -14,19 +14,12 @@ theme:
   logo: aray-logo.png
   favicon: aray-logo.png
   font:
-    text: IBM Plex Sans
-    code: IBM Plex Mono
+    text: Roboto
+    code: Roboto Mono
   palette:
-    - media: "(prefers-color-scheme: light)"
-      scheme: aray-light
-      toggle:
-        icon: material/weather-night
-        name: Switch to dark mode
-    - media: "(prefers-color-scheme: dark)"
-      scheme: aray-dark
-      toggle:
-        icon: material/weather-sunny
-        name: Switch to light mode
+    scheme: default
+    primary: custom
+    accent: custom
   features:
     - content.code.copy
     - navigation.footer
