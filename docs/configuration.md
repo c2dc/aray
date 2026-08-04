@@ -2,7 +2,7 @@
 
 Aray can use the official OpenAI API or any OpenAI-compatible endpoint. Normalization and extraction are separate roles and may use different models, providers, credentials, and streaming settings.
 
-For the shortest setup, follow the [Quick Start](../README.md#quick-start).
+For the shortest setup, follow the [Quick Start](index.md#quick-start).
 
 ## Requirements
 

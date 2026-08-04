@@ -8,14 +8,17 @@
 
 [![CI](https://github.com/c2dc/aray/actions/workflows/ci.yml/badge.svg)](https://github.com/c2dc/aray/actions/workflows/ci.yml)
 [![codecov](https://codecov.io/gh/c2dc/aray/graph/badge.svg)](https://codecov.io/gh/c2dc/aray)
+[![Documentation](https://img.shields.io/badge/docs-GitHub%20Pages-d71920)](https://c2dc.github.io/aray/)
 
 Aray turns a YARA rule into a Linux ELF, Windows PE, or format-specific byte blob for detection engineering and security testing. An LLM-assisted front end interprets the rule; a conventional, deterministic backend encodes the bytes, solves file-offset constraints, builds the artifact, and exposes the generated sources for inspection.
 
 > **The model interprets the rule. Aray's engineering backend constructs and places every resulting byte.**
 
-<p align="center">
-  <img src="docs/demo.gif" width="800" alt="Aray generating a benign artifact and verifying it with YARA" />
-</p>
+```console
+$ uv run aray data/rules/rule0.yar --scan-only
+$ yara data/rules/rule0.yar build/linux/app
+rule0 build/linux/app
+```
 
 Validated on **416 real-world rules** from the [Yara-Rules community repository](https://github.com/Yara-Rules/rules): GLM-5.2 Cloud matched **353/416 (84.9%)** through the complete pipeline and full-compile backends, compared with **330/416 (79.3%)** for GPT-4.1 in the same build mode. GPT-4.1 matched **344/416 (82.7%)** in scan-only mode, while the fully local phi4:14b configuration matched **294/416 (70.7%)**. A separate fully local experiment with the smaller Qwen3.5:9b model synthesized and validated **137/416 artifacts (32.9%)** using the full-compile backends. In normalization-only runs, GLM-5.2 accepted **412/416 (99.0%)**, compared with **404/416 (97.1%)** for GPT-4.1.
 
@@ -250,10 +253,18 @@ ELF integration tests require GCC and YARA. PE integration tests require MinGW a
 
 ## Documentation
 
+- [Project website](https://c2dc.github.io/aray/)
 - [Architecture and deterministic backends](docs/architecture.md)
 - [Configuration and model providers](docs/configuration.md)
 - [Evaluation and batch tools](docs/evaluation.md)
 - [Sample rule catalog](data/rules/CATALOG.md)
+
+Build and preview the documentation locally:
+
+```bash
+uv sync --group docs
+uv run mkdocs serve
+```
 
 ## Project Layout
 

@@ -1,0 +1,70 @@
+site_name: Aray
+site_description: Generate benign ELF, PE, and format-specific artifacts that match YARA rules.
+site_author: Lab-C2DC
+site_url: https://c2dc.github.io/aray/
+
+repo_name: c2dc/aray
+repo_url: https://github.com/c2dc/aray
+edit_uri: edit/main/docs/
+
+theme:
+  name: material
+  custom_dir: overrides
+  language: en
+  logo: aray-logo.png
+  favicon: aray-logo.png
+  font:
+    text: IBM Plex Sans
+    code: IBM Plex Mono
+  palette:
+    - media: "(prefers-color-scheme: light)"
+      scheme: aray-light
+      toggle:
+        icon: material/weather-night
+        name: Switch to dark mode
+    - media: "(prefers-color-scheme: dark)"
+      scheme: aray-dark
+      toggle:
+        icon: material/weather-sunny
+        name: Switch to light mode
+  features:
+    - content.code.copy
+    - navigation.footer
+    - navigation.indexes
+    - navigation.sections
+    - navigation.tabs
+    - navigation.top
+    - search.highlight
+    - search.suggest
+
+nav:
+  - Overview: index.md
+  - Architecture: architecture.md
+  - Configuration: configuration.md
+  - Evaluation: evaluation.md
+  - Examples: examples.md
+
+plugins:
+  - search
+
+markdown_extensions:
+  - admonition
+  - attr_list
+  - md_in_html
+  - tables
+  - toc:
+      permalink: true
+  - pymdownx.highlight:
+      anchor_linenums: true
+  - pymdownx.superfences
+
+extra_css:
+  - stylesheets/extra.css
+
+extra:
+  social:
+    - icon: fontawesome/brands/github
+      link: https://github.com/c2dc/aray
+      name: Aray on GitHub
+
+copyright: A research project from Lab-C2DC at the Aeronautics Institute of Technology (ITA)

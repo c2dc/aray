@@ -6,6 +6,12 @@ All notable changes to this project will be documented in this file.
 
 ### Added
 
+#### Project website and GitHub Pages deployment
+- **MkDocs Material website** (`mkdocs.yml`, `docs/index.md`): responsive project landing page with quick start, architecture boundary, artifact backends, published evaluation results, and research affiliation.
+- **Search and discovery metadata** (`overrides/main.html`, `docs/robots.txt`): canonical URLs, Open Graph and Twitter metadata, sitemap discovery, and built-in documentation search.
+- **Examples and custom presentation** (`docs/examples.md`, `docs/stylesheets/extra.css`): focused ELF/PE workflows, the complete sample catalog, and a responsive visual system based on the Aray identity.
+- **GitHub Pages workflow** (`.github/workflows/pages.yml`): strict MkDocs build and deployment to `https://c2dc.github.io/aray/` using commit-pinned GitHub Actions.
+
 #### Continuous integration and repository security
 - **Deterministic CI** (`.github/workflows/ci.yml`): tests Python 3.12 and 3.13 with YARA, GCC, and MinGW available, generates branch coverage without making LLM calls, and validates wheel and source-distribution builds.
 - **Codecov reporting** (`codecov.yml`, `README.md`): uploads coverage through GitHub OIDC, tracks project coverage against the previous result, requires 80% patch coverage, and exposes CI and coverage badges.
