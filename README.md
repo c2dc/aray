@@ -34,7 +34,7 @@ The shortest path uses scan-only mode. It writes a minimal scanner artifact dire
 **Requirements:** Linux, Python 3.12+, [`uv`](https://docs.astral.sh/uv/), the `yara` CLI, and access to an OpenAI-compatible model.
 
 ```bash
-git clone https://github.com/New-Horizons-Team/aray.git
+git clone https://github.com/c2dc/aray.git
 cd aray
 uv sync
 

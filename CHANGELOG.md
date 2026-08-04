@@ -56,6 +56,9 @@ All notable changes to this project will be documented in this file.
 
 ### Fixed
 
+#### Repository migration URL
+- **Quick Start clone command** (`README.md`): updated the repository URL from the previous `New-Horizons-Team/aray` location to the official `c2dc/aray` repository.
+
 #### `test_no_structured_output_flag_propagates` — forced normalization path
 - The test was patching `read_yara_rule` with `"rule x { condition: true }"`, a rule that `check_normalization_needed` correctly identifies as already normalized — so `normalize_rule` and `judge_rule` were never called, giving 2 invocations instead of the expected 4. The mocked rule is now `"rule x { strings: $a = /test/ condition: $a }"` (contains a regex), which forces the LLM normalization loop and restores the expected 4-invocation count.
 
