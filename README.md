@@ -292,6 +292,6 @@ Aray was conceived and originally developed by **Emanuel Valente**.
 The researchers involved in the project are:
 
 - **Prof. Lourenço Alves Pereira Júnior** - ITA
-- **Prof. Marcus Botacin** - TAMU
-- **Emanuel Valente** - PhD student at USP and Principal Cybersecurity Engineer at iFood ([emanuel.valente@ifood.com.br](mailto:emanuel.valente@ifood.com.br))
+- **Prof. Marcus Botacin** - Texas A&M University
+- **Emanuel Valente** - PhD student at USP | Principal Cybersecurity Engineer at iFood.
 - **Leonardo Chahud** - PhD student at ITA
