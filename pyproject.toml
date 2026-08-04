@@ -17,6 +17,7 @@ dependencies = [
 [dependency-groups]
 dev = [
     "pytest>=9.0.2",
+    "pytest-cov>=7.0.0",
 ]
 
 [project.scripts]
@@ -33,3 +34,11 @@ markers = [
     "llm: end-to-end tests that make real LLM API calls (deselect with '-m not llm')",
     "no_structured_output: LLM tests that exercise the prompt-based JSON fallback path",
 ]
+
+[tool.coverage.run]
+branch = true
+source = ["aray"]
+
+[tool.coverage.report]
+show_missing = true
+skip_covered = true

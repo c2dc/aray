@@ -6,6 +6,12 @@ All notable changes to this project will be documented in this file.
 
 ### Added
 
+#### Continuous integration and repository security
+- **Deterministic CI** (`.github/workflows/ci.yml`): tests Python 3.12 and 3.13 with YARA, GCC, and MinGW available, generates branch coverage without making LLM calls, and validates wheel and source-distribution builds.
+- **Codecov reporting** (`codecov.yml`, `README.md`): uploads coverage through GitHub OIDC, tracks project coverage against the previous result, requires 80% patch coverage, and exposes CI and coverage badges.
+- **CodeQL and dependency review** (`.github/workflows/codeql.yml`, `.github/workflows/dependency-review.yml`): scans Python changes on pushes, pull requests, and a weekly schedule, and rejects pull requests that introduce dependencies with moderate-or-higher known vulnerabilities.
+- **Dependabot updates** (`.github/dependabot.yml`): checks Python/uv and GitHub Actions dependencies weekly.
+
 #### Architecture and pipeline determinism diagrams
 - **System architecture overview** (`docs/diagrams/aray-architecture.drawio`, `docs/diagrams/aray-architecture.svg`): editable draw.io source and shareable SVG showing the CLI, role-specific LLMs, LangGraph pipeline, artifact-generation paths, and external dependencies.
 - **Detailed pipeline determinism map** (`docs/diagrams/aray-pipeline-determinism.drawio`): two-page editable diagram separating pipeline control flow from artifact generation and explicitly classifying deterministic logic, LLM-driven non-determinism, random padding, and environment/toolchain-sensitive operations.

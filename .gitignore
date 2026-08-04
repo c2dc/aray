@@ -4,6 +4,12 @@ build/
 .venv/
 .vscode/
 __pycache__/
+.coverage
+.pytest_cache/
+*.egg-info/
+coverage.xml
+dist/
+htmlcov/
 tmp/
 data/templates/linux/test/teste
 evaluation/

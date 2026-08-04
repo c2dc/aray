@@ -6,6 +6,9 @@
 
 **Generate benign files that match YARA rules, without handling malware.**
 
+[![CI](https://github.com/c2dc/aray/actions/workflows/ci.yml/badge.svg)](https://github.com/c2dc/aray/actions/workflows/ci.yml)
+[![codecov](https://codecov.io/gh/c2dc/aray/graph/badge.svg)](https://codecov.io/gh/c2dc/aray)
+
 Aray turns a YARA rule into a Linux ELF, Windows PE, or format-specific byte blob for detection engineering and security testing. An LLM-assisted front end interprets the rule; a conventional, deterministic backend encodes the bytes, solves file-offset constraints, builds the artifact, and exposes the generated sources for inspection.
 
 > **The model interprets the rule. Aray's engineering backend constructs and places every resulting byte.**
