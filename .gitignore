@@ -10,7 +10,7 @@ __pycache__/
 coverage.xml
 dist/
 htmlcov/
-site/
+/site/
 tmp/
 data/templates/linux/test/teste
 evaluation/

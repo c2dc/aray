@@ -2,14 +2,15 @@ site_name: Aray
 site_description: Generate benign ELF, PE, and format-specific artifacts that match YARA rules.
 site_author: Lab-C2DC
 site_url: https://c2dc.github.io/aray/
+docs_dir: docs/site
 
 repo_name: c2dc/aray
 repo_url: https://github.com/c2dc/aray
-edit_uri: edit/main/docs/
+edit_uri: edit/main/docs/site/
 
 theme:
   name: material
-  custom_dir: overrides
+  custom_dir: docs/theme
   language: en
   logo: aray-logo.png
   favicon: aray-logo.png

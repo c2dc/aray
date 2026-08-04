@@ -7,11 +7,12 @@ All notable changes to this project will be documented in this file.
 ### Added
 
 #### Project website and GitHub Pages deployment
-- **MkDocs Material website** (`mkdocs.yml`, `docs/index.md`): responsive project landing page with quick start, architecture boundary, artifact backends, published evaluation results, and research affiliation.
-- **Search and discovery metadata** (`overrides/main.html`, `docs/robots.txt`): canonical URLs, Open Graph and Twitter metadata, sitemap discovery, and built-in documentation search.
-- **Examples and custom presentation** (`docs/examples.md`, `docs/stylesheets/aray-v2.css`): focused ELF/PE workflows, the complete sample catalog, and a responsive white-and-red visual system inspired by the iFood palette.
-- **Institutional collaboration footer** (`overrides/main.html`, `docs/assets/institutions/`): official ITA, USP, iFood, and Texas A&M University marks, full institution names, source provenance, and responsive links on every documentation page.
+- **MkDocs Material website** (`mkdocs.yml`, `docs/site/index.md`): responsive project landing page with quick start, architecture boundary, artifact backends, published evaluation results, and research affiliation.
+- **Search and discovery metadata** (`docs/theme/main.html`, `docs/site/robots.txt`): canonical URLs, Open Graph and Twitter metadata, sitemap discovery, and built-in documentation search.
+- **Examples and custom presentation** (`docs/site/examples.md`, `docs/site/stylesheets/aray-v2.css`): focused ELF/PE workflows, the complete sample catalog, and a responsive white-and-red visual system inspired by the iFood palette.
+- **Institutional collaboration footer** (`docs/theme/main.html`, `docs/site/assets/institutions/`): official ITA, USP, iFood, and Texas A&M University marks, full institution names, source provenance, and responsive links on every documentation page.
 - **GitHub Pages workflow** (`.github/workflows/pages.yml`): strict MkDocs build and deployment to `https://c2dc.github.io/aray/` using commit-pinned GitHub Actions.
+- **Documentation source layout** (`docs/README.md`, `docs/site/`, `docs/theme/`, `docs/sources/`): separates published pages and assets from build-only theme overrides and editable diagram/provenance sources; MkDocs and GitHub Pages now consume only the relevant directories.
 
 #### Continuous integration and repository security
 - **Deterministic CI** (`.github/workflows/ci.yml`): tests Python 3.12 and 3.13 with YARA, GCC, and MinGW available, generates branch coverage without making LLM calls, and validates wheel and source-distribution builds.
@@ -21,9 +22,9 @@ All notable changes to this project will be documented in this file.
 - **Security baseline refresh** (`uv.lock`): upgraded the migrated dependency set to patched releases after enabling GitHub vulnerability alerts.
 
 #### Architecture and pipeline determinism diagrams
-- **System architecture overview** (`docs/diagrams/aray-architecture.drawio`, `docs/diagrams/aray-architecture.svg`): editable draw.io source and shareable SVG showing the CLI, role-specific LLMs, LangGraph pipeline, artifact-generation paths, and external dependencies.
-- **Detailed pipeline determinism map** (`docs/diagrams/aray-pipeline-determinism.drawio`): two-page editable diagram separating pipeline control flow from artifact generation and explicitly classifying deterministic logic, LLM-driven non-determinism, random padding, and environment/toolchain-sensitive operations.
-- **Pipeline SVG exports** (`docs/diagrams/aray-pipeline-determinism-flow.svg`, `docs/diagrams/aray-pipeline-determinism-artifacts.svg`): standalone views of the control-flow and artifact-generation pages for documentation and review.
+- **System architecture overview** (`docs/sources/diagrams/aray-architecture.drawio`, `docs/site/diagrams/aray-architecture.svg`): editable draw.io source and shareable SVG showing the CLI, role-specific LLMs, LangGraph pipeline, artifact-generation paths, and external dependencies.
+- **Detailed pipeline determinism map** (`docs/sources/diagrams/aray-pipeline-determinism.drawio`): two-page editable diagram separating pipeline control flow from artifact generation and explicitly classifying deterministic logic, LLM-driven non-determinism, random padding, and environment/toolchain-sensitive operations.
+- **Pipeline SVG exports** (`docs/site/diagrams/aray-pipeline-determinism-flow.svg`, `docs/site/diagrams/aray-pipeline-determinism-artifacts.svg`): standalone views of the control-flow and artifact-generation pages for documentation and review.
 
 #### OpenAI-compatible gateway documentation
 - **Known gateway base URLs** (`README.md`): quick-reference table and CLI examples for OpenAI, Ollama, LiteLLM, and OpenRouter, including API-key expectations and compatibility notes.
@@ -69,6 +70,9 @@ All notable changes to this project will be documented in this file.
 - **`_invoke` helper** (`tests/test_e2e.py`): `scan_only: bool = False` parameter added and forwarded to `PipelineConfig`.
 
 ### Fixed
+
+#### Architecture diagram URL
+- **Nested-page image path** (`docs/site/architecture.md`): uses Markdown image rendering so MkDocs rewrites the diagram URL correctly for the `/aray/architecture/` route instead of requesting it below `/aray/architecture/diagrams/`.
 
 #### Repository migration URL
 - **Quick Start clone command** (`README.md`): updated the repository URL from the previous `New-Horizons-Team/aray` location to the official `c2dc/aray` repository.

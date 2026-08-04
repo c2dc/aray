@@ -1,5 +1,5 @@
 <p align="center">
-  <img src="docs/aray-logo.png" alt="Aray logo" width="180" />
+  <img src="docs/site/aray-logo.png" alt="Aray logo" width="180" />
 </p>
 
 # Aray
@@ -29,9 +29,9 @@ Validated on **416 real-world rules** from the [Yara-Rules community repository]
 
 Security teams need realistic files to test detection and response workflows, but using live malware makes these exercises risky and expensive. Real samples require isolated infrastructure, strict handling procedures, and specialist oversight. These requirements make Disaster Recovery simulations and end-to-end security-control testing difficult to automate and repeat.
 
-Aray generates benign artifacts that satisfy the static conditions expressed by YARA rules without reproducing the malicious behavior of the samples those rules describe. Teams can use these artifacts to exercise scanners, alert pipelines, incident-response automation, and recovery procedures in a controlled environment. The generated sources and deterministic construction stages also make each artifact inspectable; see [Architecture](docs/architecture.md) for the trust boundary and backend design.
+Aray generates benign artifacts that satisfy the static conditions expressed by YARA rules without reproducing the malicious behavior of the samples those rules describe. Teams can use these artifacts to exercise scanners, alert pipelines, incident-response automation, and recovery procedures in a controlled environment. The generated sources and deterministic construction stages also make each artifact inspectable; see [Architecture](docs/site/architecture.md) for the trust boundary and backend design.
 
-The same workflow provides a testbed for YARA rule normalization and autonomous cyber-defense research. Researchers can study how complex detection logic is reduced to supported constraints, how those constraints are encoded into executable formats, and how automated defenses behave when presented with controlled bursts of benign detections. Such experiments can measure alert deduplication, queue saturation, response latency, and resilience to false-positive bursts without introducing live malware. See [Evaluation](docs/evaluation.md) for the current corpus, methodology, and end-to-end results.
+The same workflow provides a testbed for YARA rule normalization and autonomous cyber-defense research. Researchers can study how complex detection logic is reduced to supported constraints, how those constraints are encoded into executable formats, and how automated defenses behave when presented with controlled bursts of benign detections. Such experiments can measure alert deduplication, queue saturation, response latency, and resilience to false-positive bursts without introducing live malware. See [Evaluation](docs/site/evaluation.md) for the current corpus, methodology, and end-to-end results.
 
 ## Quick Start
 
@@ -109,14 +109,14 @@ yara data/rules/rule6.yar build/windows/app.exe
 | Normalize a rule collection | `uv run aray-normalize rules/` |
 | Save the LangGraph visualization | `uv run aray rule.yar --graph` |
 
-See [Configuration](docs/configuration.md) for model selection, gateways, environment variables, mixed providers, and all CLI options.
+See [Configuration](docs/site/configuration.md) for model selection, gateways, environment variables, mixed providers, and all CLI options.
 
 ## How It Works
 
 Aray separates probabilistic interpretation from deterministic artifact construction.
 
 <p align="center">
-  <img src="docs/diagrams/aray-pipeline-determinism-flow.svg" width="760" alt="Aray control flow showing the LLM-assisted interpretation boundary and deterministic construction stages" />
+  <img src="docs/site/diagrams/aray-pipeline-determinism-flow.svg" width="760" alt="Aray control flow showing the LLM-assisted interpretation boundary and deterministic construction stages" />
 </p>
 
 1. **Read and classify the rule deterministically.** Aray extracts the first non-private rule and checks whether unsupported complex constructs require normalization.
@@ -142,7 +142,7 @@ The backend operates on typed string and constant entries. It does not ask the m
 `--scan-only` bypasses GCC and MinGW. Aray writes minimal ELF64 or PE64 structures directly and places rule-driven bytes at their assigned file offsets. These files are intended for scanning; they are not substitutes for the runnable artifacts produced by the compiler backends.
 
 <p align="center">
-  <img src="docs/diagrams/aray-pipeline-determinism-artifacts.svg" width="760" alt="Aray artifact backends and their reproducibility properties" />
+  <img src="docs/site/diagrams/aray-pipeline-determinism-artifacts.svg" width="760" alt="Aray artifact backends and their reproducibility properties" />
 </p>
 
 ### Auditable Output
@@ -157,7 +157,7 @@ The build directory contains the normalized rule and generated intermediates:
 
 The layout algorithm is deterministic for a given typed representation. Byte-for-byte reproducibility is not promised when external toolchains vary or when a `filesize` condition requires random padding.
 
-Read [Architecture](docs/architecture.md) for the layout contracts, routing rules, constant encoding, retry behavior, and backend limitations.
+Read [Architecture](docs/site/architecture.md) for the layout contracts, routing rules, constant encoding, retry behavior, and backend limitations.
 
 ## Where the LLM Is Used
 
@@ -225,7 +225,7 @@ The normalization-only comparison used GPT-4.1 and [`glm-5.2:cloud`](https://oll
 
 For GLM-5.2, Aray connected to the locally running Ollama client, while inference ran in Ollama Cloud. GPT-4.1 inference was also cloud-hosted, so this is not a local-versus-cloud comparison. Each model judged its own normalized outputs; these figures are self-judged acceptance rates rather than independent semantic validation.
 
-The synthesis figures measure end-to-end YARA matches, not just valid model responses. See [Evaluation](docs/evaluation.md) for the collection breakdown, methodology, batch commands, and normalization evaluator.
+The synthesis figures measure end-to-end YARA matches, not just valid model responses. See [Evaluation](docs/site/evaluation.md) for the collection breakdown, methodology, batch commands, and normalization evaluator.
 
 ## Tests
 
@@ -254,9 +254,9 @@ ELF integration tests require GCC and YARA. PE integration tests require MinGW a
 ## Documentation
 
 - [Project website](https://c2dc.github.io/aray/)
-- [Architecture and deterministic backends](docs/architecture.md)
-- [Configuration and model providers](docs/configuration.md)
-- [Evaluation and batch tools](docs/evaluation.md)
+- [Architecture and deterministic backends](docs/site/architecture.md)
+- [Configuration and model providers](docs/site/configuration.md)
+- [Evaluation and batch tools](docs/site/evaluation.md)
 - [Sample rule catalog](data/rules/CATALOG.md)
 
 Build and preview the documentation locally:

@@ -5,9 +5,9 @@ on:
     branches: [main]
     paths:
       - ".github/workflows/pages.yml"
-      - "docs/**"
+      - "docs/site/**"
+      - "docs/theme/**"
       - "mkdocs.yml"
-      - "overrides/**"
       - "pyproject.toml"
       - "uv.lock"
   workflow_dispatch:

@@ -2,8 +2,8 @@
 
 Aray is an LLM-assisted rule interpreter connected to deterministic binary-construction backends. This distinction is the central design constraint: model calls reduce a YARA rule to typed data, while conventional code owns byte encoding, layout, compilation, patching, and artifact writing.
 
-<p align="center">
-  <img src="diagrams/aray-architecture.svg" width="900" alt="Aray architecture showing configuration, role-specific LLMs, LangGraph orchestration, artifact backends, and external dependencies" />
+<p align="center" markdown>
+![Aray architecture showing configuration, role-specific LLMs, LangGraph orchestration, artifact backends, and external dependencies](diagrams/aray-architecture.svg){ width="900" }
 </p>
 
 ## Pipeline Boundary
