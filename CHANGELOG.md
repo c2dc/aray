@@ -4,6 +4,8 @@ All notable changes to this project will be documented in this file.
 
 ## [Unreleased]
 
+## [0.9.0] - 2026-08-05
+
 ### Added
 
 #### Project website and GitHub Pages deployment
