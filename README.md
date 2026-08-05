@@ -16,6 +16,7 @@
 [![CI](https://github.com/c2dc/aray/actions/workflows/ci.yml/badge.svg)](https://github.com/c2dc/aray/actions/workflows/ci.yml)
 [![codecov](https://codecov.io/gh/c2dc/aray/graph/badge.svg)](https://codecov.io/gh/c2dc/aray)
 [![Documentation](https://img.shields.io/badge/docs-GitHub%20Pages-d71920)](https://c2dc.github.io/aray/)
+[![License](https://img.shields.io/badge/license-Apache--2.0-blue.svg)](LICENSE)
 
 <p align="center">
   <img src="docs/site/diagrams/aray-overview.svg" width="760" alt="A YARA rule flows through Aray and becomes a benign synthesized artifact" />
@@ -306,3 +307,10 @@ The researchers involved in the project are:
 - **Prof. Marcus Botacin** - Texas A&M University
 - **Emanuel Valente** - PhD student at USP | Principal Cybersecurity Engineer at iFood.
 - **Leonardo Chahud** - PhD student at ITA
+
+## License
+
+Copyright 2026 C2DC contributors.
+
+Licensed under the [Apache License, Version 2.0](LICENSE). See [NOTICE](NOTICE)
+for attribution information.

@@ -7,6 +7,8 @@ name = "aray"
 version = "0.1.0"
 description = "Generate benign files that match YARA rules for security testing"
 requires-python = ">=3.12"
+license = "Apache-2.0"
+license-files = ["LICENSE", "NOTICE"]
 dependencies = [
     "ipython>=9.10.0",
     "langchain-openai>=1.1.7",
