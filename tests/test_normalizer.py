@@ -17,8 +17,10 @@ from aray.normalizer import (
     _build_norm_config,
     _judge_normalization,
     _output_path_for,
+    _print_summary,
     _run_one,
     _write_report,
+    parse_args,
     run_normalization,
 )
 
@@ -61,6 +63,16 @@ class TestOutputPathFor:
         assert result.parts[-3] == "out"
         assert result.parts[-2] == "myrules"
         assert result.parts[-1] == "r.yar"
+
+    def test_standalone_file_is_written_directly_under_output_root(self, tmp_path):
+        rule = tmp_path / "rules" / "standalone.yar"
+        rule.parent.mkdir()
+        rule.touch()
+        output_root = tmp_path / "out"
+
+        result = _output_path_for(rule, rule, output_root)
+
+        assert result == output_root / "standalone.yar"
 
 
 # ---------------------------------------------------------------------------
@@ -387,6 +399,24 @@ class TestRunOne:
         assert expected_out.exists()
         assert expected_out.read_text() == normalized_text
 
+    def test_standalone_file_writes_output_at_root(self, tmp_path):
+        rule = tmp_path / "rules" / "Foo.yar"
+        rule.parent.mkdir()
+        rule.write_text('rule Foo { strings: $a = /regex/ condition: $a }')
+        output_root = tmp_path / "normalized"
+        cfg = self._make_config(str(output_root))
+        normalized_text = "rule Foo { condition: true }"
+        verdict = JudgeVerdict(verdict="passed", reason="OK")
+
+        with (
+            patch("aray.normalizer._normalize_one_rule", return_value=normalized_text),
+            patch("aray.normalizer._judge_normalization", return_value=verdict),
+        ):
+            result = _run_one(rule, rule, cfg, MagicMock(), MagicMock())
+
+        assert result.output_path == str(output_root / "Foo.yar")
+        assert (output_root / "Foo.yar").read_text() == normalized_text
+
     def test_uncertain_verdict_maps_to_failed(self, tmp_path):
         rule = tmp_path / "rules" / "R.yar"
         rule.parent.mkdir()
@@ -664,13 +694,14 @@ class TestWriteReportPath:
             judge_model="gpt-4.1",
         )
 
-    def test_auto_path_uses_timestamp_dir(self, tmp_path, monkeypatch):
+    def test_auto_path_uses_timestamp_dir(self, tmp_path, monkeypatch, capsys):
         monkeypatch.chdir(tmp_path)
         cfg = NormConfig(directories=[], output=None)
         run_ts = "2026-03-08T14-22-01"
         _write_report([self._make_result()], cfg, run_ts)
         expected = tmp_path / "evaluation" / "reports" / run_ts / "norm_report.json"
         assert expected.exists()
+        assert f"Report written to {expected.resolve()}" in capsys.readouterr().out
 
     def test_explicit_output_path_used_as_is(self, tmp_path):
         out = str(tmp_path / "my_norm.json")
@@ -678,6 +709,44 @@ class TestWriteReportPath:
         _write_report([self._make_result()], cfg, "2026-03-08T00-00-00")
         assert (tmp_path / "my_norm.json").exists()
         assert not (tmp_path / "evaluation").exists()
+
+
+class TestPrintSummary:
+    def test_prints_generated_file_locations(self, tmp_path, capsys):
+        output_path = tmp_path / "normalized" / "r.yar"
+        result = NormResult(
+            rule_path="r.yar",
+            rule_name="R",
+            status="passed",
+            normalized_rule="rule R { condition: true }",
+            output_path=str(output_path),
+            judge_verdict="passed",
+            judge_reason="OK",
+            error=None,
+            duration_seconds=1.0,
+        )
+
+        _print_summary([result])
+
+        output = capsys.readouterr().out
+        assert "Generated normalized files:" in output
+        assert str(output_path.resolve()) in output
+
+
+class TestParseArgs:
+    def test_no_arguments_prints_help_and_exits_zero(self, capsys):
+        with pytest.raises(SystemExit) as excinfo:
+            parse_args([])
+
+        captured = capsys.readouterr()
+        assert excinfo.value.code == 0
+        assert "usage: aray-normalize" in captured.out
+        assert captured.err == ""
+
+    def test_accepts_file_path(self):
+        args = parse_args(["rule.yar"])
+
+        assert args.dirs == ["rule.yar"]
 
 
 class TestLoadConfigFileNormalizerSection:

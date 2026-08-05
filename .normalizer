@@ -4,8 +4,8 @@
 # Values in this file override NORMALIZE_* and OPENAI_* variables loaded from
 # the process environment or .env.
 
-# Directories to walk recursively for .yar files. Positional CLI directories
-# replace this entire list.
+# YARA files or directories to process. Directories are walked recursively.
+# Positional CLI paths replace this entire list.
 directories = [
     "evaluation/rules/cve_rules",
     "evaluation/rules/antidebug_antivm",
@@ -17,8 +17,8 @@ directories = [
     "evaluation/rules/webshells",
 ]
 
-# Normalized rules are written below this root while preserving each input
-# directory's relative structure.
+# Normalized rules are written below this root. Directory inputs preserve their
+# relative structure; standalone files are written directly below this root.
 output_root = "evaluation/normalized-new"
 
 # Normalize settings override NORMALIZE_MODEL / NORMALIZE_BASE_URL and then
@@ -37,6 +37,8 @@ output_root = "evaluation/normalized-new"
 # judge_api_key = "sk-..."
 
 # Runtime and report controls.
+# Run `aray-normalize --config .normalizer` to use this input list without
+# positional paths; a completely argument-free invocation only prints CLI help.
 # no_stream = false
 # workers = 1                    # parallel normalization requests
 # output = "norm_report.json"   # default: timestamped evaluation/reports path

@@ -116,8 +116,8 @@ yara data/rules/rule6.yar build/windows/app.exe
 | Generate a runnable ELF or PE | `uv run aray rule.yar` |
 | Verify the output | `yara rule.yar build/linux/app` |
 | Trace routing and byte placement | `uv run aray rule.yar --debug` |
-| Evaluate a directory of rules | `uv run aray-eval rules/ --scan-only` |
-| Normalize a rule collection | `uv run aray-normalize rules/` |
+| Evaluate rule files or directories | `uv run aray-eval rules/example.yar --scan-only` |
+| Normalize rule files or directories | `uv run aray-normalize rules/` |
 | Save the LangGraph visualization | `uv run aray rule.yar --graph` |
 
 See [Configuration](docs/site/configuration.md) for model selection, gateways, environment variables, mixed providers, and all CLI options.

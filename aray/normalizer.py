@@ -1,4 +1,4 @@
-"""Batch normalization evaluator — runs only the normalize_rule node over YARA directories."""
+"""Batch normalization evaluator — runs normalize_rule over YARA rule paths."""
 
 from __future__ import annotations
 
@@ -70,10 +70,12 @@ class NormConfig:
 # Path helpers
 # ---------------------------------------------------------------------------
 
-def _output_path_for(rule_path: Path, input_dir: Path, output_root: Path) -> Path:
-    """Mirror rule_path from input_dir into output_root/<input_dir_name>/..."""
-    relative = rule_path.relative_to(input_dir)
-    return output_root / input_dir.name / relative
+def _output_path_for(rule_path: Path, input_path: Path, output_root: Path) -> Path:
+    """Build the normalized path for a file or mirrored input directory."""
+    if input_path.is_file():
+        return output_root / rule_path.name
+    relative = rule_path.relative_to(input_path)
+    return output_root / input_path.name / relative
 
 
 # ---------------------------------------------------------------------------
@@ -93,7 +95,7 @@ def _normalize_one_rule(rule_text: str, llm: ChatOpenAI, use_structured: bool) -
 
 def _run_one(
     rule_path: Path,
-    input_dir: Path,
+    input_path: Path,
     norm_cfg: NormConfig,
     norm_llm: ChatOpenAI,
     judge_llm: ChatOpenAI,
@@ -126,7 +128,7 @@ def _run_one(
 
         if not _requires_normalization(first_rule):
             print(f"[normalize] {rule_path.name}: rule is already normalized — skipping LLM")
-            out_path = _output_path_for(rule_path, input_dir, Path(norm_cfg.output_root))
+            out_path = _output_path_for(rule_path, input_path, Path(norm_cfg.output_root))
             out_path.parent.mkdir(parents=True, exist_ok=True)
             out_path.write_text(first_rule)
             duration = time.monotonic() - t0
@@ -147,7 +149,7 @@ def _run_one(
 
         normalized_text = _normalize_one_rule(first_rule, norm_llm, norm_cfg.use_structured_output)
 
-        out_path = _output_path_for(rule_path, input_dir, Path(norm_cfg.output_root))
+        out_path = _output_path_for(rule_path, input_path, Path(norm_cfg.output_root))
         out_path.parent.mkdir(parents=True, exist_ok=True)
         out_path.write_text(normalized_text)
 
@@ -201,7 +203,7 @@ def _run_one(
 
 def run_normalization(
     rule_paths: list[Path],
-    input_dirs: list[Path],
+    input_paths: list[Path],
     norm_cfg: NormConfig,
 ) -> list[NormResult]:
     """Normalize rule_paths and return results, printing progress to stderr."""
@@ -227,8 +229,8 @@ def run_normalization(
     total = len(rule_paths)
     results: list[NormResult] = []
 
-    def _process(idx: int, rp: Path, input_dir: Path) -> NormResult:
-        result = _run_one(rp, input_dir, norm_cfg, norm_llm, judge_llm)
+    def _process(idx: int, rp: Path, input_path: Path) -> NormResult:
+        result = _run_one(rp, input_path, norm_cfg, norm_llm, judge_llm)
         judge_info = f"judge: {result.judge_verdict}" if result.judge_verdict else result.status
         print(
             f"[{idx}/{total}] {rp} → {result.status} ({judge_info})",
@@ -238,13 +240,13 @@ def run_normalization(
         return result
 
     if norm_cfg.workers <= 1:
-        for i, (rp, input_dir) in enumerate(zip(rule_paths, input_dirs), 1):
-            results.append(_process(i, rp, input_dir))
+        for i, (rp, input_path) in enumerate(zip(rule_paths, input_paths), 1):
+            results.append(_process(i, rp, input_path))
     else:
         futures: list = []
         with ThreadPoolExecutor(max_workers=norm_cfg.workers) as executor:
-            for i, (rp, input_dir) in enumerate(zip(rule_paths, input_dirs), 1):
-                futures.append(executor.submit(_process, i, rp, input_dir))
+            for i, (rp, input_path) in enumerate(zip(rule_paths, input_paths), 1):
+                futures.append(executor.submit(_process, i, rp, input_path))
         for f in futures:
             results.append(f.result())
 
@@ -289,9 +291,10 @@ def _write_report(results: list[NormResult], norm_cfg: NormConfig, run_ts: str) 
         if norm_cfg.output
         else f"evaluation/reports/{run_ts}/norm_report.json"
     )
-    Path(out).parent.mkdir(parents=True, exist_ok=True)
-    Path(out).write_text(json.dumps(report, indent=2))
-    print(f"Report written to {out}")
+    output_path = Path(out)
+    output_path.parent.mkdir(parents=True, exist_ok=True)
+    output_path.write_text(json.dumps(report, indent=2))
+    print(f"Report written to {output_path.resolve()}")
 
 
 def _print_summary(results: list[NormResult]) -> None:
@@ -319,6 +322,12 @@ def _print_summary(results: list[NormResult]) -> None:
             truncated = (r.error or r.judge_reason or "")[:120]
             print(f"  {r.rule_path}: {truncated}")
 
+    generated = [Path(r.output_path).resolve() for r in results if r.output_path]
+    if generated:
+        print("\nGenerated normalized files:")
+        for path in generated:
+            print(f"  {path}")
+
 
 # ---------------------------------------------------------------------------
 # Config
@@ -328,6 +337,8 @@ def _build_norm_config(args: argparse.Namespace, file_cfg: dict) -> NormConfig:
     """Merge CLI args > config-file [normalizer] > env vars > defaults."""
     nc = file_cfg.get("normalizer", {})
 
+    # Keep the configuration field name for compatibility with existing
+    # .normalizer files, but values may now be files or directories.
     directories = list(args.dirs) if args.dirs else nc.get("directories", [])
 
     model = (
@@ -402,7 +413,7 @@ def _build_norm_config(args: argparse.Namespace, file_cfg: dict) -> NormConfig:
 # CLI
 # ---------------------------------------------------------------------------
 
-def parse_args() -> argparse.Namespace:
+def parse_args(argv: list[str] | None = None) -> argparse.Namespace:
     parser = argparse.ArgumentParser(
         prog="aray-normalize",
         description="Batch-normalize YARA rules and assess quality with an LLM judge.",
@@ -410,8 +421,8 @@ def parse_args() -> argparse.Namespace:
     parser.add_argument(
         "dirs",
         nargs="*",
-        metavar="DIR",
-        help="Directories to walk for .yar files (overrides config file).",
+        metavar="PATH",
+        help="YARA files or directories to process (overrides config file).",
     )
     parser.add_argument(
         "--config",
@@ -480,7 +491,11 @@ def parse_args() -> argparse.Namespace:
         default=False,
         help="Disable streaming on all LLM calls.",
     )
-    return parser.parse_args()
+    args_to_parse = sys.argv[1:] if argv is None else argv
+    if not args_to_parse:
+        parser.print_help()
+        raise SystemExit(0)
+    return parser.parse_args(args_to_parse)
 
 
 def main() -> None:
@@ -492,19 +507,19 @@ def main() -> None:
 
     if not norm_cfg.directories:
         print(
-            "error: no directories specified — use positional args or set "
+            "error: no input paths specified — use positional args or set "
             "[normalizer] directories in the config file.",
             file=sys.stderr,
         )
         sys.exit(1)
 
     all_paths: list[Path] = []
-    all_dirs: list[Path] = []
-    for d in norm_cfg.directories:
-        dir_path = Path(d)
-        for yar in _find_yar_files([dir_path]):
+    input_paths: list[Path] = []
+    for value in norm_cfg.directories:
+        input_path = Path(value)
+        for yar in _find_yar_files([input_path]):
             all_paths.append(yar)
-            all_dirs.append(dir_path)
+            input_paths.append(input_path)
 
     if not all_paths:
         print("No .yar files found.")
@@ -514,6 +529,6 @@ def main() -> None:
 
     print(f"Found {len(all_paths)} rule(s) to normalize.")
     print(f"Models: normalize={norm_cfg.model}  judge={norm_cfg.judge_model}")
-    results = run_normalization(all_paths, all_dirs, norm_cfg)
+    results = run_normalization(all_paths, input_paths, norm_cfg)
     _write_report(results, norm_cfg, run_ts)
     _print_summary(results)

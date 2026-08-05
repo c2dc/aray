@@ -6,9 +6,9 @@
 # EXTRACT_MODEL. A role-specific value in this file still overrides its shared
 # counterpart.
 
-# Directories to walk recursively for .yar files. Paths may be relative to the
-# current working directory or absolute. Positional CLI directories replace
-# this entire list.
+# YARA files or directories to process. Directories are walked recursively.
+# Paths may be relative to the current working directory or absolute.
+# Positional CLI paths replace this entire list.
 #directories = [
 #    "evaluation/normalized/cve_rules",
 #    "evaluation/normalized/antidebug_antivm",
@@ -57,6 +57,8 @@ base_url = "http://localhost:11434/v1"
 # extract_no_stream = false
 
 # Artifact and execution controls.
+# Run `aray-eval --config .evaluator` to use this input list without positional
+# paths; a completely argument-free invocation only prints CLI help.
 # scan_only = false
 # workers = 1                 # parallel rule evaluations
 # output = "report.json"      # default: timestamped evaluation/reports path

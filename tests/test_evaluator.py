@@ -22,6 +22,7 @@ from aray.evaluator import (
     _run_one,
     _write_report,
     _yara_scan,
+    parse_args,
 )
 
 
@@ -131,6 +132,36 @@ class TestFindYarFiles:
         names = [p.name for p in result]
         assert "r1.yar" in names
         assert "r2.yar" in names
+
+    def test_accepts_single_yar_file(self, tmp_path):
+        rule = tmp_path / "single.yar"
+        rule.write_text('rule single { condition: true }')
+
+        assert _find_yar_files([rule]) == [rule]
+
+    def test_accepts_mixed_files_and_directories(self, tmp_path):
+        directory = tmp_path / "rules"
+        directory.mkdir()
+        nested_rule = directory / "nested.yar"
+        nested_rule.write_text('rule nested { condition: true }')
+        single_rule = tmp_path / "single.yar"
+        single_rule.write_text('rule single { condition: true }')
+
+        assert _find_yar_files([single_rule, directory]) == sorted(
+            [single_rule, nested_rule]
+        )
+
+    def test_ignores_non_yar_file(self, tmp_path):
+        text_file = tmp_path / "rule.txt"
+        text_file.write_text('rule ignored { condition: true }')
+
+        assert _find_yar_files([text_file]) == []
+
+    def test_excludes_standalone_index_file(self, tmp_path):
+        index = tmp_path / "index.yar"
+        index.write_text('include "other.yar"\n')
+
+        assert _find_yar_files([index]) == []
 
 
 # ---------------------------------------------------------------------------
@@ -562,13 +593,14 @@ class TestWriteReportPath:
             extract_model="gpt-4.1",
         )
 
-    def test_auto_path_uses_timestamp_dir(self, tmp_path, monkeypatch):
+    def test_auto_path_uses_timestamp_dir(self, tmp_path, monkeypatch, capsys):
         monkeypatch.chdir(tmp_path)
         cfg = EvalConfig(directories=[], output=None)
         run_ts = "2026-03-08T14-22-01"
         _write_report([self._make_result()], cfg, run_ts)
         expected = tmp_path / "evaluation" / "reports" / run_ts / "eval_report.json"
         assert expected.exists()
+        assert f"Report written to {expected.resolve()}" in capsys.readouterr().out
 
     def test_explicit_output_path_used_as_is(self, tmp_path):
         out = str(tmp_path / "my.json")
@@ -576,6 +608,22 @@ class TestWriteReportPath:
         _write_report([self._make_result()], cfg, "2026-03-08T00-00-00")
         assert (tmp_path / "my.json").exists()
         assert not (tmp_path / "evaluation").exists()
+
+
+class TestParseArgs:
+    def test_no_arguments_prints_help_and_exits_zero(self, capsys):
+        with pytest.raises(SystemExit) as excinfo:
+            parse_args([])
+
+        captured = capsys.readouterr()
+        assert excinfo.value.code == 0
+        assert "usage: aray-eval" in captured.out
+        assert captured.err == ""
+
+    def test_accepts_file_path(self):
+        args = parse_args(["rule.yar"])
+
+        assert args.dirs == ["rule.yar"]
 
 
 # ---------------------------------------------------------------------------
@@ -642,3 +690,20 @@ class TestRunOneNormalizationFailure:
         assert result.normalize_reason == "bad regex replacement"
         assert result.error is not None and result.error.startswith("normalization failed:")
         assert result.yara_returncode is None
+
+    def test_prints_retained_artifact_directory(self, tmp_path, capsys):
+        rule = tmp_path / "bad.yar"
+        rule.write_text('rule Bad { strings: $a = /regex/ condition: $a }')
+        artifact_dir = tmp_path / "artifacts"
+        artifact_dir.mkdir()
+        mock_graph = MagicMock()
+        mock_graph.invoke.return_value = {"normalization_error": "bad rule"}
+        cfg = EvalConfig(directories=[], keep_artifacts=True)
+
+        with (
+            patch("aray.evaluator.tempfile.mkdtemp", return_value=str(artifact_dir)),
+            patch("aray.evaluator.build_graph", return_value=mock_graph),
+        ):
+            _run_one(rule, cfg)
+
+        assert f"Artifacts kept at {artifact_dir.resolve()}" in capsys.readouterr().out

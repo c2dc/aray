@@ -38,7 +38,8 @@ python main.py data/rules/rule0.yar --no-stream --model llama3
 python main.py data/rules/rule0.yar --scan-only   # Linux → minimal ELF64
 python main.py data/rules/rule6.yar --scan-only   # PE rule → minimal PE64
 
-# Batch-normalize rules and assess quality with an LLM judge
+# Normalize files or directories and assess quality with an LLM judge
+python normalize.py evaluation/rules/cve_rules/example.yar
 python normalize.py evaluation/rules/cve_rules --output /tmp/norm_report.json
 python normalize.py --config .normalizer          # uses [normalizer] section
 uv run aray-normalize evaluation/rules/cve_rules  # via installed script
@@ -66,7 +67,7 @@ uv run pytest -m llm -v
   - `artifact_writer.py` — Raw binary writers for `--scan-only` mode: `write_linux_artifact()` (minimal ELF64, strings at exact file offsets, non-nested constants patched) and `write_pe_artifact()` (minimal PE64, `NumberOfSections=0`, strings at exact file offsets, non-nested constants patched).
   - `nodes.py` — `read_yara_rule`, `check_normalization_needed`, `normalize_rule`, `judge_rule`, `fail_normalization`, `extract_strings`, `extract_constants`, `route_file_type`, `write_generic`, plus helpers `_requires_normalization` and `_judge_normalization`.
   - `graph.py` — `build_graph()` and `save_graph_png()`. `build_graph()` accepts a `PipelineConfig` (or `None` for defaults) and constructs separate `ChatOpenAI` instances for the `normalize` and `extract` roles; node functions receive `llm` and `use_structured` via `functools.partial`.
-  - `normalizer.py` — Batch normalization evaluator: walks directories, calls only the `normalize_rule` node per rule (no extraction/compilation), writes each normalized rule to a mirrored output directory, uses an LLM-as-judge to assess semantic correctness, and writes a JSON report. Used by `normalize.py` and the `aray-normalize` script.
+  - `normalizer.py` — Batch normalization evaluator: accepts YARA files or recursively walks directories, calls only the `normalize_rule` node per rule (no extraction/compilation), writes each normalized rule to the output root (mirroring directory inputs), uses an LLM-as-judge to assess semantic correctness, and writes a JSON report. Used by `normalize.py` and the `aray-normalize` script.
 
 The pipeline uses a LangGraph StateGraph with the following flow:
 

@@ -150,7 +150,13 @@ comparison with phi4:14b, add retries for empty or invalid responses, validate
 extracted hex and constants before code generation, and use failed YARA scans
 to guide targeted extraction or synthesis retries.
 
-## Batch Evaluation
+## Evaluation
+
+Evaluate one file:
+
+```bash
+uv run aray-eval evaluation/rules/cve_rules/example.yar --scan-only
+```
 
 Evaluate one directory:
 
@@ -158,12 +164,12 @@ Evaluate one directory:
 uv run aray-eval evaluation/rules/cve_rules --scan-only
 ```
 
-Evaluate several directories with parallel workers:
+Evaluate any combination of files and directories with parallel workers:
 
 ```bash
 uv run aray-eval \
   evaluation/rules/cve_rules \
-  evaluation/rules/malware \
+  evaluation/rules/malware/example.yar \
   --workers 4 \
   --scan-only \
   --output eval_report.json
@@ -182,6 +188,13 @@ Useful options:
 | role-specific model, URL, key, and streaming flags | same semantics as `aray` |
 
 Without `--output`, reports are written to `evaluation/reports/<timestamp>/eval_report.json`.
+The CLI prints the report's absolute path after writing it. When
+`--keep-artifacts` is enabled, it also prints the absolute temporary directory
+preserved for each evaluated rule.
+
+Calling `aray-eval` without arguments prints the standard help and exits with
+status `0`. To process paths from `.evaluator` without positional inputs, pass
+the configuration option explicitly: `aray-eval --config .evaluator`.
 
 ### Evaluator Configuration
 
@@ -207,9 +220,10 @@ keep_artifacts = false
 Configuration precedence is `CLI > TOML > environment > built-in default`.
 Within one source, role-specific values override shared values. Consequently, a
 shared `model` or `base_url` in `.evaluator` overrides even role-specific
-`NORMALIZE_*` and `EXTRACT_*` environment variables. Positional directories
-replace the configured directory list. API keys are never printed or included
-in reports.
+`NORMALIZE_*` and `EXTRACT_*` environment variables. Positional files or
+directories replace the configured input list. Despite its legacy name, the
+TOML `directories` list also accepts individual `.yar` files. API keys are
+never printed or included in reports.
 
 Index files named `index.yar`, `*_index.yar`, or `index_*.yar`, and files beginning with an `include` directive, are skipped. Rulesets process only the first non-private rule.
 
@@ -251,6 +265,17 @@ Each result distinguishes pipeline errors, normalization failures, build failure
 ## Normalization Evaluator
 
 `aray-normalize` runs normalization without extraction or artifact construction. It writes each normalized rule under an output tree that mirrors the input and asks a separate model to assess quality.
+
+Normalize one file:
+
+```bash
+uv run aray-normalize evaluation/rules/cve_rules/example.yar
+```
+
+The result of a standalone file is written directly below `--output-root`, for
+example `evaluation/normalized/example.yar`. Directory inputs retain their
+mirrored directory structure. At the end, the CLI lists the absolute path of
+every normalized file and the report it generated.
 
 ```bash
 uv run aray-normalize evaluation/rules/cve_rules
@@ -302,6 +327,11 @@ workers = 4
 
 The normalizer uses the same `CLI > TOML > environment > default` precedence.
 Its normalization settings fall back through `NORMALIZE_*`, then `OPENAI_*`.
+The legacy TOML `directories` list accepts both individual `.yar` files and
+directories.
+Calling `aray-normalize` without arguments prints the standard help and exits
+with status `0`. Use `aray-normalize --config .normalizer` to explicitly run
+only the inputs configured in TOML.
 Unless explicitly overridden, the judge inherits the effective normalization
 model, endpoint, and credential. API keys are not stored in reports.
 

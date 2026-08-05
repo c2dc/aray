@@ -1,4 +1,4 @@
-"""Evaluation framework for aray — batch-run the pipeline over YARA rule directories."""
+"""Evaluation framework for aray — batch-run the pipeline over YARA rule paths."""
 
 from __future__ import annotations
 
@@ -8,6 +8,7 @@ import os
 import re
 import shutil
 import subprocess
+import sys
 import tempfile
 import threading
 import tomllib
@@ -91,16 +92,18 @@ def _is_index_file(path: Path) -> bool:
     return False
 
 
-def _find_yar_files(directories: list[str | Path]) -> list[Path]:
-    """Walk *directories* recursively and return sorted non-index `.yar` files."""
+def _find_yar_files(paths: list[str | Path]) -> list[Path]:
+    """Return sorted non-index `.yar` files from files and directories."""
     found: list[Path] = []
-    for d in directories:
-        p = Path(d)
-        if not p.is_dir():
-            continue
-        for yar in p.rglob("*.yar"):
-            if not _is_index_file(yar):
-                found.append(yar)
+    for path in paths:
+        p = Path(path)
+        if p.is_file():
+            if p.suffix == ".yar" and not _is_index_file(p):
+                found.append(p)
+        elif p.is_dir():
+            for yar in p.rglob("*.yar"):
+                if not _is_index_file(yar):
+                    found.append(yar)
     return sorted(found)
 
 
@@ -376,6 +379,8 @@ def _run_one(rule_path: Path, eval_cfg: EvalConfig) -> EvalResult:
     finally:
         if not eval_cfg.keep_artifacts:
             shutil.rmtree(tmpdir, ignore_errors=True)
+        else:
+            print(f"Artifacts kept at {tmpdir.resolve()}")
 
 
 # ---------------------------------------------------------------------------
@@ -450,9 +455,10 @@ def _write_report(results: list[EvalResult], eval_cfg: EvalConfig, run_ts: str) 
         if eval_cfg.output
         else f"evaluation/reports/{run_ts}/eval_report.json"
     )
-    Path(out).parent.mkdir(parents=True, exist_ok=True)
-    Path(out).write_text(json.dumps(report, indent=2))
-    print(f"Report written to {out}")
+    output_path = Path(out)
+    output_path.parent.mkdir(parents=True, exist_ok=True)
+    output_path.write_text(json.dumps(report, indent=2))
+    print(f"Report written to {output_path.resolve()}")
 
 
 def _print_summary(results: list[EvalResult]) -> None:
@@ -495,7 +501,8 @@ def _build_eval_config(args: argparse.Namespace, file_cfg: dict) -> EvalConfig:
     """Merge CLI args > config-file [evaluator] > env vars > defaults."""
     ev = file_cfg.get("evaluator", {})
 
-    # Directories: CLI positional > config file
+    # Input paths: CLI positional > config file. Keep the configuration field
+    # name for compatibility with existing .evaluator files.
     if args.dirs:
         directories = list(args.dirs)
     else:
@@ -611,16 +618,16 @@ def _build_eval_config(args: argparse.Namespace, file_cfg: dict) -> EvalConfig:
 # CLI
 # ---------------------------------------------------------------------------
 
-def parse_args() -> argparse.Namespace:
+def parse_args(argv: list[str] | None = None) -> argparse.Namespace:
     parser = argparse.ArgumentParser(
         prog="aray-eval",
-        description="Batch-evaluate aray against a directory of YARA rules.",
+        description="Batch-evaluate aray against YARA rule files or directories.",
     )
     parser.add_argument(
         "dirs",
         nargs="*",
-        metavar="DIR",
-        help="Directories to walk for .yar files (overrides config file).",
+        metavar="PATH",
+        help="YARA files or directories to process (overrides config file).",
     )
     parser.add_argument(
         "--config",
@@ -719,7 +726,11 @@ def parse_args() -> argparse.Namespace:
         default=False,
         help="Disable streaming for the extract nodes only.",
     )
-    return parser.parse_args()
+    args_to_parse = sys.argv[1:] if argv is None else argv
+    if not args_to_parse:
+        parser.print_help()
+        raise SystemExit(0)
+    return parser.parse_args(args_to_parse)
 
 
 def main() -> None:
@@ -730,9 +741,8 @@ def main() -> None:
     eval_cfg = _build_eval_config(args, file_cfg)
 
     if not eval_cfg.directories:
-        import sys
         print(
-            "error: no directories specified — use positional args or set "
+            "error: no input paths specified — use positional args or set "
             "[evaluator] directories in the config file.",
             file=sys.stderr,
         )
