@@ -1,0 +1,25 @@
+<mxfile host="app.diagrams.net" agent="OpenCode">
+  <diagram id="aray-overview" name="Aray Overview">
+    <mxGraphModel dx="960" dy="250" grid="1" gridSize="10" guides="1" tooltips="1" connect="1" arrows="1" fold="1" page="1" pageScale="1" pageWidth="960" pageHeight="250" math="0" shadow="0">
+      <root>
+        <mxCell id="0" />
+        <mxCell id="1" parent="0" />
+        <mxCell id="2" parent="1" style="shape=document;whiteSpace=wrap;html=1;boundedLbl=1;fillColor=#FFF7ED;strokeColor=#F97316;strokeWidth=2;fontColor=#9A3412;fontSize=20;fontStyle=1;spacingTop=4;" value="YARA rule&lt;br&gt;&lt;font style=&quot;font-size: 12px; font-weight: normal;&quot;&gt;Detection logic • .yar&lt;/font&gt;" vertex="1">
+          <mxGeometry x="20" y="64" width="230" height="118" as="geometry" />
+        </mxCell>
+        <mxCell id="3" parent="1" style="rounded=1;arcSize=14;whiteSpace=wrap;html=1;fillColor=#DBEAFE;strokeColor=#2563EB;strokeWidth=2;fontColor=#1E3A8A;fontSize=24;fontStyle=1;" value="ARAY&lt;br&gt;&lt;font style=&quot;font-size: 12px; font-weight: normal;&quot;&gt;Interpret • construct&lt;/font&gt;" vertex="1">
+          <mxGeometry x="365" y="64" width="230" height="118" as="geometry" />
+        </mxCell>
+        <mxCell id="4" parent="1" style="rounded=1;arcSize=14;whiteSpace=wrap;html=1;fillColor=#ECFDF5;strokeColor=#22C55E;strokeWidth=2;fontColor=#166534;fontSize=19;fontStyle=1;" value="Benign synthesized&lt;br&gt;artifact&lt;br&gt;&lt;font style=&quot;font-size: 12px; font-weight: normal;&quot;&gt;ELF • PE • Generic&lt;/font&gt;" vertex="1">
+          <mxGeometry x="710" y="64" width="230" height="118" as="geometry" />
+        </mxCell>
+        <mxCell id="5" edge="1" parent="1" source="2" target="3" style="edgeStyle=orthogonalEdgeStyle;rounded=1;orthogonalLoop=1;jettySize=auto;html=1;strokeColor=#64748B;strokeWidth=3;endArrow=block;endFill=1;endSize=10;">
+          <mxGeometry relative="1" as="geometry" />
+        </mxCell>
+        <mxCell id="6" edge="1" parent="1" source="3" target="4" style="edgeStyle=orthogonalEdgeStyle;rounded=1;orthogonalLoop=1;jettySize=auto;html=1;strokeColor=#64748B;strokeWidth=3;endArrow=block;endFill=1;endSize=10;">
+          <mxGeometry relative="1" as="geometry" />
+        </mxCell>
+      </root>
+    </mxGraphModel>
+  </diagram>
+</mxfile>

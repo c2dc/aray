@@ -11,6 +11,10 @@ hide:
     <p class="aray-kicker">Detection engineering without live malware</p>
     <h1>Generate benign files that match YARA rules.</h1>
     <p class="aray-lead">Aray interprets detection logic with an LLM, then uses deterministic engineering backends to construct inspectable Linux ELF, Windows PE, and format-specific artifacts.</p>
+    <a class="aray-recognition" href="https://blackhat.com/us-26/arsenal/schedule/#aray-benign-binary-synthesis-for-signature-validation-without-the-malware-52919" aria-label="Aray was selected for presentation at Black Hat USA 2026 Arsenal">
+      <span>Black Hat USA 2026</span>
+      <strong>Selected for Arsenal</strong>
+    </a>
     <div class="aray-actions">
       <a class="md-button md-button--primary" href="#quick-start">Get started</a>
       <a class="md-button" href="architecture/">Explore the architecture</a>
@@ -20,6 +24,10 @@ hide:
     <img src="aray-logo.png" alt="Aray robot inspecting ELF and PE artifacts">
   </div>
 </section>
+
+<p align="center">
+  <img src="diagrams/aray-overview.svg" width="760" alt="A YARA rule flows through Aray and becomes a benign synthesized artifact">
+</p>
 
 <div class="aray-metrics" markdown>
 

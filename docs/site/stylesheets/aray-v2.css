@@ -108,6 +108,33 @@
   max-width: 44rem;
 }
 
+.md-typeset .aray-recognition {
+  align-items: center;
+  background: #111111;
+  border-left: 0.24rem solid var(--aray-red);
+  border-radius: 0.25rem;
+  color: #ffffff;
+  display: inline-flex;
+  font-family: "Roboto Mono", monospace;
+  font-size: 0.72rem;
+  gap: 0.65rem;
+  letter-spacing: 0.025em;
+  padding: 0.55rem 0.75rem;
+  text-decoration: none;
+}
+
+.md-typeset .aray-recognition strong {
+  border-left: 1px solid #555555;
+  color: #ffffff;
+  padding-left: 0.65rem;
+}
+
+.md-typeset .aray-recognition:hover,
+.md-typeset .aray-recognition:focus-visible {
+  background: #282828;
+  color: #ffffff;
+}
+
 .aray-actions {
   display: flex;
   flex-wrap: wrap;
@@ -335,6 +362,19 @@
 }
 
 @media screen and (max-width: 30rem) {
+  .md-typeset .aray-recognition {
+    align-items: flex-start;
+    flex-direction: column;
+    gap: 0.35rem;
+  }
+
+  .md-typeset .aray-recognition strong {
+    border-left: 0;
+    border-top: 1px solid #555555;
+    padding-left: 0;
+    padding-top: 0.35rem;
+  }
+
   .aray-metrics {
     grid-template-columns: 1fr;
   }

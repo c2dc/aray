@@ -6,9 +6,20 @@
 
 **Generate benign files that match YARA rules, without handling malware.**
 
+<p align="center">
+  <a href="https://blackhat.com/us-26/arsenal/schedule/#aray-benign-binary-synthesis-for-signature-validation-without-the-malware-52919">
+    <img src="https://img.shields.io/badge/Black%20Hat%20USA%202026-Selected%20for%20Arsenal-d71920?style=for-the-badge&amp;labelColor=111111" alt="Selected for Black Hat USA 2026 Arsenal" />
+  </a><br />
+  <strong><a href="https://blackhat.com/us-26/arsenal/schedule/#aray-benign-binary-synthesis-for-signature-validation-without-the-malware-52919">Aray: Benign Binary Synthesis for Signature Validation Without the Malware</a></strong>
+</p>
+
 [![CI](https://github.com/c2dc/aray/actions/workflows/ci.yml/badge.svg)](https://github.com/c2dc/aray/actions/workflows/ci.yml)
 [![codecov](https://codecov.io/gh/c2dc/aray/graph/badge.svg)](https://codecov.io/gh/c2dc/aray)
 [![Documentation](https://img.shields.io/badge/docs-GitHub%20Pages-d71920)](https://c2dc.github.io/aray/)
+
+<p align="center">
+  <img src="docs/site/diagrams/aray-overview.svg" width="760" alt="A YARA rule flows through Aray and becomes a benign synthesized artifact" />
+</p>
 
 Aray turns a YARA rule into a Linux ELF, Windows PE, or format-specific byte blob for detection engineering and security testing. An LLM-assisted front end interprets the rule; a conventional, deterministic backend encodes the bytes, solves file-offset constraints, builds the artifact, and exposes the generated sources for inspection.
 
