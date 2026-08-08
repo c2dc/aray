@@ -17,14 +17,13 @@ from dotenv import load_dotenv
 from langchain_openai import ChatOpenAI
 
 from aray.evaluator import (
-    _extract_first_rule_name,
-    _extract_first_rule_text,
     _find_yar_files,
     _is_index_file,
     _load_config_file,
 )
 from aray.constants import DUMMY_API_KEY
 from aray.nodes import _judge_normalization, _requires_normalization, normalize_rule
+from aray.yara_source import NoPublicRuleError, select_yara_file
 
 
 # ---------------------------------------------------------------------------
@@ -82,9 +81,20 @@ def _output_path_for(rule_path: Path, input_path: Path, output_root: Path) -> Pa
 # Normalization
 # ---------------------------------------------------------------------------
 
-def _normalize_one_rule(rule_text: str, llm: ChatOpenAI, use_structured: bool) -> str:
+def _normalize_one_rule(
+    rule_text: str,
+    llm: ChatOpenAI,
+    use_structured: bool,
+    history: list[dict] | None = None,
+) -> str:
     """Call the normalize_rule node directly (no full graph)."""
-    state = {"yara_rule": rule_text, "name": "aray", "rule_path": ""}
+    state = {
+        "yara_rule": rule_text,
+        "name": "aray",
+        "rule_path": "",
+        "normalize_history": history or [],
+        "normalize_attempts": len(history or []),
+    }
     result = functools.partial(normalize_rule, llm=llm, use_structured=use_structured)(state)
     return result["normalized_rule"]
 
@@ -105,6 +115,7 @@ def _run_one(
     t0 = time.monotonic()
     _normalize_model = norm_cfg.model
     _judge_model = norm_cfg.judge_model
+    rule_name: str | None = None
 
     if _is_index_file(rule_path):
         return NormResult(
@@ -121,14 +132,19 @@ def _run_one(
             judge_model=_judge_model,
         )
 
+    out_path = _output_path_for(rule_path, input_path, Path(norm_cfg.output_root))
     try:
-        rule_text = rule_path.read_text(errors="replace")
-        first_rule = _extract_first_rule_text(rule_text)
-        rule_name = _extract_first_rule_name(first_rule)
+        selected = select_yara_file(rule_path)
+        first_rule = selected.text
+        rule_name = selected.name
 
         if not _requires_normalization(first_rule):
             print(f"[normalize] {rule_path.name}: rule is already normalized — skipping LLM")
-            out_path = _output_path_for(rule_path, input_path, Path(norm_cfg.output_root))
+            from aray.yara_validation import validate_normalization
+
+            validation_error = validate_normalization(first_rule, first_rule)
+            if validation_error:
+                raise ValueError(validation_error)
             out_path.parent.mkdir(parents=True, exist_ok=True)
             out_path.write_text(first_rule)
             duration = time.monotonic() - t0
@@ -147,15 +163,35 @@ def _run_one(
                 already_normalized=True,
             )
 
-        normalized_text = _normalize_one_rule(first_rule, norm_llm, norm_cfg.use_structured_output)
+        history: list[dict] = []
+        for attempt in range(1, 4):
+            try:
+                normalized_text = _normalize_one_rule(
+                    first_rule,
+                    norm_llm,
+                    norm_cfg.use_structured_output,
+                    history,
+                )
+                verdict = _judge_normalization(
+                    first_rule, normalized_text, judge_llm, norm_cfg.use_structured_output
+                )
+            except Exception:
+                if attempt == 3:
+                    raise
+                continue
+            if verdict.verdict == "passed":
+                break
+            history.append({
+                "attempt": attempt,
+                "rule": normalized_text,
+                "reason": verdict.reason,
+            })
 
-        out_path = _output_path_for(rule_path, input_path, Path(norm_cfg.output_root))
-        out_path.parent.mkdir(parents=True, exist_ok=True)
-        out_path.write_text(normalized_text)
-
-        verdict = _judge_normalization(
-            first_rule, normalized_text, judge_llm, norm_cfg.use_structured_output
-        )
+        if verdict.verdict == "passed":
+            out_path.parent.mkdir(parents=True, exist_ok=True)
+            out_path.write_text(normalized_text)
+        else:
+            out_path.unlink(missing_ok=True)
 
         status: Literal["passed", "failed"] = (
             "passed" if verdict.verdict == "passed" else "failed"
@@ -166,7 +202,7 @@ def _run_one(
             rule_name=rule_name,
             status=status,
             normalized_rule=normalized_text,
-            output_path=str(out_path),
+            output_path=str(out_path) if verdict.verdict == "passed" else None,
             judge_verdict=verdict.verdict,
             judge_reason=verdict.reason,
             error=None,
@@ -175,13 +211,25 @@ def _run_one(
             judge_model=_judge_model,
         )
 
+    except NoPublicRuleError as exc:
+        duration = time.monotonic() - t0
+        out_path.unlink(missing_ok=True)
+        return NormResult(
+            rule_path=str(rule_path),
+            rule_name=None,
+            status="skipped",
+            normalized_rule=None,
+            output_path=None,
+            judge_verdict=None,
+            judge_reason=None,
+            error=str(exc),
+            duration_seconds=round(duration, 3),
+            normalize_model=_normalize_model,
+            judge_model=_judge_model,
+        )
     except Exception as exc:  # noqa: BLE001
         duration = time.monotonic() - t0
-        rule_name = None
-        try:
-            rule_name = _extract_first_rule_name(rule_path.read_text(errors="replace"))
-        except OSError:
-            pass
+        out_path.unlink(missing_ok=True)
         return NormResult(
             rule_path=str(rule_path),
             rule_name=rule_name,

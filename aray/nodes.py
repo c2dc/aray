@@ -95,30 +95,58 @@ def write_generic(state: ArayGraphState, debug: bool = False) -> dict:
 def read_yara_rule(state: ArayGraphState) -> dict:
     """Read a YARA rule from the path specified in state.
 
-    If the file contains multiple rules (a ruleset), only the first rule block
-    is extracted and stored in state — subsequent rules are ignored.
+    If the file contains multiple rules, only the first non-private rule and
+    its reachable dependencies are synthesized into one standalone rule.
     """
-    from aray.evaluator import _extract_first_rule_text
-    rule = Path(state["rule_path"]).read_text()
-    return {"yara_rule": _extract_first_rule_text(rule)}
+    from aray.yara_source import select_yara_file
+
+    selected = select_yara_file(Path(state["rule_path"]))
+    return {"yara_rule": selected.text}
 
 
 def _requires_normalization(rule_text: str) -> bool:
     """Return True if the rule needs LLM normalization, False if it can skip."""
-    # 1. Regex string pattern
-    if re.search(r'\$\w+\s*=\s*/', rule_text):
-        return True
-    # 2 & 3. Hex wildcards / jumps — scoped to { } blocks
-    for block in re.findall(r'\{([^}]*)\}', rule_text):
-        if '??' in block or re.search(r'\[\s*\d', block):
+    from aray.yara_source import _parse_source, _tokens
+
+    rules, _ = _parse_source(rule_text)
+    rule = next((candidate for candidate in rules if not candidate.private), None)
+    if rule is not None:
+        if rule.strings_span is not None:
+            strings_text = rule.source[rule.strings_span[0]:rule.strings_span[1]]
+            string_tokens = _tokens(strings_text)
+            if any(token.kind == "regex" for token in string_tokens):
+                return True
+            for index, token in enumerate(string_tokens[:-1]):
+                if token.value != "=" or string_tokens[index + 1].value != "{":
+                    continue
+                depth = 1
+                block: list = []
+                probe = index + 2
+                while probe < len(string_tokens) and depth:
+                    current = string_tokens[probe]
+                    if current.value == "{":
+                        depth += 1
+                    elif current.value == "}":
+                        depth -= 1
+                    if depth:
+                        block.append(current)
+                    probe += 1
+                if any(current.value == "?" for current in block) or any(
+                    current.value == "["
+                    and block[position + 1].kind == "number"
+                    for position, current in enumerate(block[:-1])
+                ):
+                    return True
+        cond = rule.source[rule.condition_span[0]:rule.condition_span[1]]
+        tokens = _tokens(cond)
+        if any(token.kind == "ident" and token.value.lower() == "or" for token in tokens):
             return True
-    # 4 & 5. Condition-level checks
-    m = re.search(r'\bcondition\s*:(.*?)(?:\}|$)', rule_text, re.DOTALL | re.IGNORECASE)
-    if m:
-        cond = m.group(1)
-        if re.search(r'\bor\b', cond):
-            return True
-        if re.search(r'\b\d+\s+of\b', cond):
+        if any(
+            token.kind == "number"
+            and index + 1 < len(tokens)
+            and tokens[index + 1].value.lower() == "of"
+            for index, token in enumerate(tokens)
+        ):
             return True
     return False
 
@@ -134,6 +162,11 @@ def check_normalization_needed(state: ArayGraphState) -> dict:
     if needed:
         print("[normalize] rule requires normalization — running LLM loop")
         return {"needs_normalization": True}
+    from aray.yara_validation import validate_normalization
+
+    validation_error = validate_normalization(state["yara_rule"], state["yara_rule"])
+    if validation_error:
+        raise ValueError(validation_error)
     # Fast path: pass raw rule through as normalized_rule
     print("[normalize] rule is already normalized — skipping LLM loop")
     return {"needs_normalization": False, "normalized_rule": state["yara_rule"]}
@@ -187,19 +220,21 @@ def normalize_rule(state: ArayGraphState, llm: ChatOpenAI, use_structured: bool 
             "3. Replace count expressions like `5 of ($a*)` or `5 of them` with explicit string references.\n"
             "   When the original condition says `N of them` and there are M > N strings defined, pick N strings and REMOVE the other M-N strings from the strings section entirely.\n"
             "   Example: 6 strings defined ($s1–$s6), condition `5 of them` → keep any 5, say $s1–$s5; remove $s6 from strings section; write condition as `$s1 and $s2 and $s3 and $s4 and $s5`.\n"
-            "4. Preserve all string modifiers (e.g. `wide`, `fullword`, `nocase`) exactly as they appear after the variable name — never remove them.\n"
-            "5. In hex string patterns, replace all wildcard bytes (`??`) with `00`, and replace all jump expressions (`[N]` or `[N-M]`) with exactly N repetitions of `00` (use the minimum N).\n"
+            "   A quantified expression is one boolean operand: `A and 1 of ($x*)` must become `A and $x1`, never `$x1` or `A or $x1`.\n"
+            "4. Preserve all string modifiers (e.g. `wide`, `fullword`, `nocase`) exactly. Never add or remove a modifier.\n"
+            "5. In hex string patterns, replace wildcard nibbles deterministically: `??` → `00`, `A?` → `A0`, and `?B` → `0B`. Replace all jump expressions (`[N]` or `[N-M]`) with exactly N repetitions of `00` (use the minimum N).\n"
             "   Examples:\n"
             "   - `{ AB CD ?? EF }` → `{ AB CD 00 EF }`\n"
+            "   - `{ 56 3? 2E ?A }` → `{ 56 30 2E 0A }`\n"
             "   - `{ F4 23 [4-6] 62 B4 }` → `{ F4 23 00 00 00 00 62 B4 }`\n"
             "   - `{ F4 23 [3] 62 B4 }` → `{ F4 23 00 00 00 62 B4 }`\n"
             "   - `{ F4 23 [1-100] 62 B4 }` → `{ F4 23 00 62 B4 }` (minimum is 1)\n"
-            "6. Use standard YARA variable name syntax (no double-quoted variable names).\n"
+            "6. Use standard YARA variable name syntax (no double-quoted variable names). Anonymous input strings are pre-named as `$__aray_anon_N`; preserve those exact names and never rename them to `$a`, `$s1`, or other aliases.\n"
             "7. Do not add comments or blank strings.\n"
             "8. If you must remove a string variable entirely (e.g. when eliminating OR conditions), update the condition accordingly. Replace `all of them` with an explicit `and`-joined list of the required retained variables (e.g. `$a and $b and $d`). For `any of them`, select one cheapest retained variable as the OR witness and remove the alternatives.\n"
             "   CRITICAL: every string variable defined in the `strings:` section MUST be referenced in the `condition:` section. If after simplification a variable is no longer referenced in the condition, REMOVE it from the strings section too.\n"
             "9. If the string value contains double-quote characters, escape them as `\\\"` inside the YARA string literal. For example, the text `(\"a\",\"\")` must appear as `(\\\"a\\\",\\\"\\\")` in the rule.\n"
-            "10. Output exactly ONE rule. If the input contains only one rule, output only that rule.\n"
+            "10. Output exactly ONE complete rule with the `rule` keyword. Preserve required `import` directives before it, but never emit helper or additional rules.\n"
             "11. NEVER collapse the rule into a trivial shell. The normalized rule MUST preserve the same structural sections as the original:\n"
             "    - If the original has a `strings:` section, the normalized rule MUST also have a `strings:` section with at least one string variable.\n"
             "    - The `condition:` MUST reference at least one string variable or integer constant from the original.\n"
@@ -283,8 +318,11 @@ def normalize_rule(state: ArayGraphState, llm: ChatOpenAI, use_structured: bool 
     human_msg = HumanMessage(content=human_content)
 
     response = _invoke_llm(llm, NormalizedYaraRule, [sys_msg, human_msg], use_structured)
+    from aray.yara_validation import canonicalize_normalization
+
+    normalized_rule = canonicalize_normalization(state["yara_rule"], response.rule)
     return {
-        "normalized_rule": response.rule,
+        "normalized_rule": normalized_rule,
         "normalize_attempts": state.get("normalize_attempts", 0) + 1,
     }
 
@@ -357,7 +395,8 @@ _JUDGE_SYSTEM = (
     "   no high exact offsets, no format-forcing PE/nested/wide requirements, and finally fewer/smaller strings\n"
     "   and constants. Filesize and format constraints from a discarded branch must also be discarded.\n"
     "4. Replaces count expressions like `5 of ($a*)` with an explicit list of string references.\n"
-    "5. Preserves all string modifiers (wide, fullword, nocase) exactly on any retained string.\n"
+    "   It must retain exactly N witnesses. `A and 1 of ($x*)` becomes `A and $x1`, never `$x1` or `A or $x1`.\n"
+    "5. Preserves all string modifiers (wide, fullword, nocase) exactly on any retained string, adding none.\n"
     "6. Uses standard YARA variable name syntax (no double-quoted variable names).\n"
     "7. Does not add comments or blank strings.\n"
     "8. If a string variable is removed, quantified references are rewritten to use only the required retained variables.\n\n"
@@ -369,7 +408,7 @@ _JUDGE_SYSTEM = (
     "it is a complete original branch and avoids the tight-size PE branch.\n\n"
     "Mark as \"failed\" only if the normalized rule:\n"
     "- Introduces a string variable name that does not exist in the original rule, OR\n"
-    "- Drops a modifier (wide, fullword, nocase) from a string that was retained, OR\n"
+    "- Adds or drops a modifier (wide, fullword, nocase) from a string that was retained, OR\n"
     "- Has invalid YARA syntax (including: unreferenced string variables defined in strings: but absent from condition:, or unescaped double-quotes inside string literals), OR\n"
     "- Is completely unrelated to the original (hallucinated rule), OR\n"
     "- Removes the entire `strings:` section when the original rule had one (even a single string must be preserved), OR\n"
@@ -394,11 +433,16 @@ def _judge_normalization(
 ) -> "JudgeVerdict":
     """Ask the judge LLM to assess the normalization."""
     from aray.models import JudgeVerdict  # local import avoids top-level circular risk
-    from aray.yara_validation import validate_regex_replacements
+    from aray.yara_validation import normalization_is_proven, validate_normalization
 
-    validation_error = validate_regex_replacements(original, normalized)
+    validation_error = validate_normalization(original, normalized)
     if validation_error:
         return JudgeVerdict(verdict="failed", reason=validation_error)
+    if normalization_is_proven(original, normalized):
+        return JudgeVerdict(
+            verdict="passed",
+            reason="Deterministic validation proved the complete count expansion and retained constraints.",
+        )
 
     sys_msg = SystemMessage(content=_JUDGE_SYSTEM)
     human_msg = HumanMessage(

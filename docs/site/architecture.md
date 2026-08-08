@@ -47,14 +47,14 @@ LangGraph provides orchestration, state transitions, and bounded retries. It doe
 
 ### Read Rule
 
-`read_yara_rule` loads the requested file. For a ruleset, it uses brace-aware parsing to select the first non-private rule; private and subsequent rules are ignored.
+`read_yara_rule` loads the requested file. For a ruleset, it lexically selects the first non-private rule and inlines only its reachable rule dependencies into one standalone rule; unrelated and subsequent rules are ignored. Anonymous strings are assigned stable `$__aray_anon_N` names before any LLM call.
 
 ### Decide Whether to Normalize
 
-`check_normalization_needed` is a deterministic regex-based check. It sends a rule through normalization when it finds:
+`check_normalization_needed` is a deterministic lexical check. It sends a rule through normalization when it finds:
 
 - regex strings;
-- hex wildcards (`??`);
+- hex wildcards (`??`, `A?`, or `?B`);
 - hex jumps (`[N]` or `[N-M]`);
 - `or` conditions;
 - numeric count expressions such as `5 of ($a*)`.
@@ -67,14 +67,26 @@ Otherwise the original text becomes `normalized_rule` unchanged. This skips norm
 
 Normalization produces a constructible subset, not a bidirectionally equivalent rule: every normalized match must satisfy the original, but selecting one complete `or` branch may intentionally match fewer files. Branches are grouped using YARA precedence (`not`, then `and`, then `or`) before simplification, so conditions are never carried across alternatives.
 
-When several branches are valid, the normalizer prioritizes construction feasibility and cost. It avoids tight maximum file sizes that compiled artifacts cannot satisfy, large minimum or exact sizes that require padding, high exact offsets, format-forcing PE or wide-string requirements, and then excess strings, constants, and literal bytes. Before the LLM judge runs, every retained regex replacement is compiled with `yara-python` and scanned against its proposed fixed literal. An invalid witness is rejected deterministically and returned as feedback for the next attempt. The judge then rejects structurally invalid or clearly more expensive branches.
+When several branches are valid, the normalizer prioritizes construction feasibility and cost. It avoids tight maximum file sizes that compiled artifacts cannot satisfy, large minimum or exact sizes that require padding, high exact offsets, format-forcing PE or wide-string requirements, and then excess strings, constants, and literal bytes. Before the LLM judge runs, YARA syntax, retained modifiers, count expansions, and regex/hex witnesses are checked deterministically. Safe repairs restore canonical anonymous names, exact modifiers, unambiguous count expansions, and retained values that do not require a model decision. The judge handles only cases not fully proven by these checks.
+
+Retained string values are canonicalized by their original type:
+
+| Original declaration | Deterministic treatment |
+|---|---|
+| Fixed literal | restore the exact original source value |
+| Fixed hex sequence | restore the exact original byte pattern |
+| Linear hex with `??`, `A?`, `?B`, `[N]`, or `[N-M]` | choose zero wildcard nibbles and expand the minimum jump exactly |
+| Regex | keep the proposed fixed witness and test it with `yara-python` |
+| Complex hex expression | keep the proposed witness and test it with `yara-python` |
+
+This division keeps branch selection probabilistic while removing character counting and fixed-value transcription from the model. For example, `[29]` always expands to exactly 29 bytes, and a retained 252-character literal is restored byte for byte rather than regenerated. Unsupported complex hex expressions are never guessed by the canonicalizer.
 
 - `passed`: continue to extraction.
 - `uncertain`: currently continue to extraction.
 - `failed`: retry normalization with feedback.
 - Three failed attempts: run `fail_normalization` and terminate without constructing an artifact.
 
-The batch normalizer behaves differently: it treats `uncertain` as a failed quality result while retaining the normalized output for inspection or training data.
+The batch normalizer retries failed verdicts and transient invocation errors up to three times. It writes output only after a passed verdict and removes stale output after failures or errors.
 
 ### Extract Typed Data
 
@@ -243,4 +255,4 @@ The normal `aray` CLI does not run YARA after construction. This preserves separ
 - Nested `uint32` expressions are assumed to indicate PE structure.
 - Full-compile output can vary with GCC, Binutils, or MinGW versions.
 - Random filesize padding prevents byte-for-byte reproducibility.
-- Rulesets process only the first non-private rule.
+- Rulesets process only the first non-private rule and its reachable dependency closure. Exactly one rule is sent to the LLM and written as output.

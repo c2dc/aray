@@ -23,6 +23,10 @@ from dotenv import load_dotenv
 
 from aray.config import LLMNodeConfig, PipelineConfig
 from aray.graph import build_graph
+from aray.yara_source import (
+    extract_first_rule_name as _extract_first_rule_name,
+    extract_first_rule_text as _extract_first_rule_text,
+)
 
 
 # ---------------------------------------------------------------------------
@@ -107,105 +111,6 @@ def _find_yar_files(paths: list[str | Path]) -> list[Path]:
     return sorted(found)
 
 
-def _extract_first_rule_name(text: str) -> str | None:
-    """Return the name of the first YARA rule found in *text*, or None."""
-    m = re.search(r'^\s*(?:private\s+|global\s+)*rule\s+(\w+)', text, re.MULTILINE)
-    return m.group(1) if m else None
-
-
-def _extract_first_rule_text(text: str) -> str:
-    """Return the first complete non-private YARA rule block from *text*.
-
-    Strips file-level comments, include/import statements, and any subsequent
-    rules — returning only the text from the first non-private ``rule`` keyword
-    (including any ``global`` prefix) to its matching closing brace.
-    Private rules are skipped entirely so downstream nodes always operate on a
-    rule that can produce a standalone match.
-    Falls back to *text* unchanged if no non-private rule header is found, so
-    callers never receive an empty string.
-
-    Handles string literals (``"..."``, with backslash escapes), line comments
-    (``//``), and block comments (``/* ... */``) to avoid false brace counts.
-    """
-    search_start = 0
-    while True:
-        match = re.search(
-            r'((?:(?:private|global)\s+)*)rule\s+\w+', text[search_start:]
-        )
-        if not match:
-            return text  # fallback: no (more) rules found
-
-        qualifiers = match.group(1)  # modifiers before "rule", e.g. "private "
-        is_private = 'private' in qualifiers
-
-        abs_start = search_start + match.start()
-        pos = search_start + match.end()
-
-        # Advance to the opening brace of the rule body
-        while pos < len(text) and text[pos] != '{':
-            pos += 1
-        if pos >= len(text):
-            if not is_private:
-                return text[abs_start:]
-            return text  # unclosed private rule at EOF — give up
-
-        # Walk the body counting braces, skipping strings, comments, and regex literals
-        depth = 0
-        in_str = False
-        in_regex = False
-        in_line_comment = False
-        in_block_comment = False
-
-        while pos < len(text):
-            ch = text[pos]
-
-            if in_line_comment:
-                if ch == '\n':
-                    in_line_comment = False
-            elif in_block_comment:
-                if ch == '*' and pos + 1 < len(text) and text[pos + 1] == '/':
-                    in_block_comment = False
-                    pos += 1
-            elif in_str:
-                if ch == '\\':
-                    pos += 1  # skip escaped character
-                elif ch == '"':
-                    in_str = False
-            elif in_regex:
-                if ch == '\\':
-                    pos += 1  # skip escaped character inside regex
-                elif ch == '/':
-                    in_regex = False
-            else:
-                if ch == '/' and pos + 1 < len(text) and text[pos + 1] == '/':
-                    in_line_comment = True
-                    pos += 1
-                elif ch == '/' and pos + 1 < len(text) and text[pos + 1] == '*':
-                    in_block_comment = True
-                    pos += 1
-                elif ch == '/':
-                    in_regex = True  # YARA regex literal: /pattern/
-                elif ch == '"':
-                    in_str = True
-                elif ch == '{':
-                    depth += 1
-                elif ch == '}':
-                    depth -= 1
-                    if depth == 0:
-                        if not is_private:
-                            return text[abs_start:pos + 1]
-                        # Skip this private rule and search for the next one
-                        search_start = pos + 1
-                        break  # continue outer while True loop
-
-            pos += 1
-        else:
-            # Reached end of text (unclosed rule body)
-            if not is_private:
-                return text[abs_start:]
-            return text  # unclosed private rule — give up
-
-
 # ---------------------------------------------------------------------------
 # YARA scan helper
 # ---------------------------------------------------------------------------
@@ -250,9 +155,22 @@ def _run_one(rule_path: Path, eval_cfg: EvalConfig) -> EvalResult:
         rule_text = rule_path.read_text(errors="replace")
     except OSError:
         pass
-    rule_name = _extract_first_rule_name(rule_text)
     normalize_model = eval_cfg.normalize_model or eval_cfg.model
     extract_model = eval_cfg.extract_model or eval_cfg.model
+    try:
+        rule_name = _extract_first_rule_name(rule_text)
+    except Exception as exc:  # noqa: BLE001
+        return EvalResult(
+            rule_path=str(rule_path),
+            rule_name=None,
+            status="failed",
+            error=str(exc),
+            duration_seconds=0.0,
+            yara_stdout=None,
+            yara_returncode=None,
+            normalize_model=normalize_model,
+            extract_model=extract_model,
+        )
 
     # Skip index files immediately (belt-and-suspenders in case caller missed it)
     # (per-step endpoint/key resolution happens below, before building the config)
@@ -262,6 +180,18 @@ def _run_one(rule_path: Path, eval_cfg: EvalConfig) -> EvalResult:
             rule_name=rule_name,
             status="skipped",
             error=None,
+            duration_seconds=0.0,
+            yara_stdout=None,
+            yara_returncode=None,
+            normalize_model=normalize_model,
+            extract_model=extract_model,
+        )
+    if rule_name is None:
+        return EvalResult(
+            rule_path=str(rule_path),
+            rule_name=None,
+            status="skipped",
+            error="YARA source contains no non-private rule",
             duration_seconds=0.0,
             yara_stdout=None,
             yara_returncode=None,
@@ -322,16 +252,17 @@ def _run_one(rule_path: Path, eval_cfg: EvalConfig) -> EvalResult:
                 normalize_reason=normalization_error,
             )
 
-        # Detect produced binary and the rule file to scan with.
-        # For generic artifacts we scan with normalized_rule.yar (first rule only)
-        # rather than the original multi-rule file; for PE/ELF we keep using
-        # rule_path (existing behaviour, single-rule files in practice).
+        # Detect the produced binary and always scan the selected standalone
+        # normalized rule. A later rule from the input ruleset must never make
+        # evaluation pass.
         binary: Path | None = None
-        scan_rule = rule_path
+        scan_rule: Path | None = None
         if (windows_dir / "app.exe").exists():
             binary = windows_dir / "app.exe"
+            scan_rule = windows_dir / "normalized_rule.yar"
         elif (linux_dir / "app").exists():
             binary = linux_dir / "app"
+            scan_rule = linux_dir / "normalized_rule.yar"
         else:
             # Generic artifact — find the first output.* file written by write_generic
             for f in sorted(generic_dir.glob("output*")):
@@ -339,12 +270,12 @@ def _run_one(rule_path: Path, eval_cfg: EvalConfig) -> EvalResult:
                     binary = f
                     break
             if binary is not None:
-                norm = generic_dir / "normalized_rule.yar"
-                if norm.exists():
-                    scan_rule = norm
+                scan_rule = generic_dir / "normalized_rule.yar"
 
         if binary is None:
             raise FileNotFoundError("No binary produced by pipeline")
+        if scan_rule is None or not scan_rule.exists():
+            raise FileNotFoundError("No normalized rule produced by pipeline")
 
         rc, stdout, _stderr = _yara_scan(scan_rule, binary)
         passed = rc == 0 and _has_yara_match(stdout)

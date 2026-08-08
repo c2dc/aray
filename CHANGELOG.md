@@ -4,6 +4,26 @@ All notable changes to this project will be documented in this file.
 
 ## [Unreleased]
 
+### Added
+
+- **Standalone YARA source selection** (`aray/yara_source.py`): lexically selects the first non-private rule, inlines reachable same-file and sibling dependencies, preserves imports and global constraints, resolves rule sets, and assigns stable names to anonymous strings before any model call.
+- **Deterministic normalization validation** (`aray/yara_validation.py`): checks syntax, modifiers, retained values, count expansions, regex witnesses, and hex witnesses; supported complete count expansions can bypass the LLM judge when fully proven.
+
+### Changed
+
+- **Batch normalization reliability** (`aray/normalizer.py`): retries failed verdicts and transient invocation errors up to three times, writes only accepted candidates, and removes stale output after terminal failures or errors.
+- **Ruleset evaluation** (`aray/evaluator.py`, `aray/nodes.py`): synthesizes and scans the selected standalone rule and its dependency closure rather than allowing unrelated rules from the source file to affect evaluation.
+
+### Fixed
+
+- **Deterministic retained-value canonicalization** (`aray/yara_validation.py`): retained fixed literals and fixed hex sequences are restored directly from the original rule, while linear hex wildcards and jumps are converted to canonical witnesses without model-side character or byte counting. Regex and complex-hex witnesses continue through `yara-python` validation.
+- **Normalization regressions** (`tests/test_yara_validation.py`): covers long repeated literals, escaped values, model-induced type changes, fixed hex changes, exact and ranged jumps, partial wildcards, and complex patterns that must not be guessed.
+
+### Documentation
+
+- **Latest GLM-5.2 normalization results** (`README.md`, `docs/site/`): records the fourth 416-rule run at 415 accepted rules (99.8%), the successful isolated retests for `Ponmocup` and `CVE-2012-0158`, and explicitly avoids claiming a later full-corpus `416/416` result.
+- **Targeted GPT-4.1 retest** (`README.md`, `docs/site/`): documents recovery of 17/21 previously non-passed cases through the official OpenAI endpoint, the four remaining regex-witness failures, and the distinction between projected recovery and a complete corpus run.
+
 ## [0.9.0] - 2026-08-05
 
 ### Added

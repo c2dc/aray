@@ -7,19 +7,19 @@
 # YARA files or directories to process. Directories are walked recursively.
 # Positional CLI paths replace this entire list.
 directories = [
-    "evaluation/rules/cve_rules",
-    "evaluation/rules/antidebug_antivm",
-    "evaluation/rules/crypto",
-    "evaluation/rules/email",
-    "evaluation/rules/malware",
-    "evaluation/rules/packers",
-    "evaluation/rules/exploit_kits",
-    "evaluation/rules/webshells",
+    "evaluation/yara-repos/rules/cve_rules",
+    "evaluation/yara-repos/rules/antidebug_antivm",
+    "evaluation/yara-repos/rules/crypto",
+    "evaluation/yara-repos/rules/email",
+    "evaluation/yara-repos/rules/malware",
+    "evaluation/yara-repos/rules/packers",
+    "evaluation/yara-repos/rules/exploit_kits",
+    "evaluation/yara-repos/rules/webshells",
 ]
 
 # Normalized rules are written below this root. Directory inputs preserve their
 # relative structure; standalone files are written directly below this root.
-output_root = "evaluation/normalized-new"
+output_root = "evaluation/normalized-glm-5.2"
 
 # Normalize settings override NORMALIZE_MODEL / NORMALIZE_BASE_URL and then
 # OPENAI_MODEL / OPENAI_BASE_URL.

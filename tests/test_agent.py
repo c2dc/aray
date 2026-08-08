@@ -327,6 +327,28 @@ class TestReadYaraRule:
         with pytest.raises(FileNotFoundError):
             read_yara_rule(state)
 
+    def test_reads_only_first_public_rule_and_reachable_helpers(self, tmp_path):
+        path = tmp_path / "multi.yar"
+        path.write_text(
+            'private rule Helper { strings: $h = "helper" condition: $h }\n'
+            'rule First { condition: Helper }\n'
+            'rule Later { strings: $x = /later.*/ condition: $x }\n'
+        )
+        state: ArayGraphState = {
+            "name": "test",
+            "rule_path": str(path),
+            "yara_rule": "",
+            "rule_strings": [],
+            "has_condition": False,
+        }
+
+        selected = read_yara_rule(state)["yara_rule"]
+
+        assert "rule First" in selected
+        assert "rule Helper" not in selected
+        assert "rule Later" not in selected
+        assert "$__Helper_h" in selected
+
 
 # ---------------------------------------------------------------------------
 # extract_strings node (LLM mocked)
@@ -1070,8 +1092,17 @@ class TestRequiresNormalization:
         rule = 'rule r { strings: $a = /pattern/ condition: $a }'
         assert _requires_normalization(rule) is True
 
+    def test_anonymous_regex_string_true(self):
+        rule = 'rule r { strings: $ = /pattern/ condition: any of them }'
+        assert _requires_normalization(rule) is True
+
     def test_hex_wildcard_true(self):
         rule = 'rule r { strings: $a = { AB ?? CD } condition: $a }'
+        assert _requires_normalization(rule) is True
+
+    @pytest.mark.parametrize("wildcard", ["3?", "?A"])
+    def test_hex_partial_nibble_wildcard_true(self, wildcard):
+        rule = f'rule r {{ strings: $a = {{ AB {wildcard} CD }} condition: $a }}'
         assert _requires_normalization(rule) is True
 
     def test_hex_jump_fixed_true(self):
@@ -1081,6 +1112,13 @@ class TestRequiresNormalization:
     def test_hex_jump_range_true(self):
         rule = 'rule r { strings: $a = { F4 [4-6] 62 } condition: $a }'
         assert _requires_normalization(rule) is True
+
+    def test_hex_syntax_inside_literal_or_comment_does_not_trigger(self):
+        rule = (
+            'rule r { strings: $a = "?? [3]" // { ?? [4-6] }\n'
+            'condition: $a }'
+        )
+        assert _requires_normalization(rule) is False
 
     def test_or_condition_true(self):
         rule = 'rule r { strings: $a = "x" $b = "y" condition: $a or $b }'
@@ -1094,6 +1132,13 @@ class TestRequiresNormalization:
         rule = 'rule r { strings: $s1 = "x" $s2 = "y" condition: 1 of ($s*) }'
         assert _requires_normalization(rule) is True
 
+    def test_condition_keywords_inside_literals_do_not_trigger_normalization(self):
+        rule = (
+            'rule r { strings: $a = "or 1 of them" '
+            'condition: $a and "or 1 of them" == "or 1 of them" }'
+        )
+        assert _requires_normalization(rule) is False
+
     def test_rule0_file_false(self):
         rule_text = (RULES_DIR / "rule0.yar").read_text()
         assert _requires_normalization(rule_text) is False
@@ -1101,6 +1146,20 @@ class TestRequiresNormalization:
     def test_rule8_file_true(self):
         rule_text = (RULES_DIR / "rule8.yar").read_text()
         assert _requires_normalization(rule_text) is True
+
+    @pytest.mark.parametrize(
+        "rule_path",
+        [
+            "evaluation/yara-repos/rules/malware/MALW_Regsubdat.yar",
+            "evaluation/yara-repos/rules/malware/TOOLKIT_Wineggdrop.yar",
+        ],
+    )
+    def test_second_glm_round_partial_nibble_rules_require_normalization(
+        self, rule_path
+    ):
+        from aray.yara_source import select_yara_file
+
+        assert _requires_normalization(select_yara_file(Path(rule_path)).text) is True
 
 
 # ---------------------------------------------------------------------------
@@ -2069,6 +2128,18 @@ class TestEvaluatorRunOne:
             (_c.BUILD_DIR_GENERIC / filename).write_bytes(content)
         return fake_invoke
 
+    def test_file_with_only_private_rules_is_skipped(self, tmp_path):
+        rule_path = tmp_path / "private.yar"
+        rule_path.write_text('private rule Helper { condition: true }')
+        mock_graph = MagicMock()
+
+        with patch("aray.evaluator.build_graph", return_value=mock_graph):
+            result = _run_one(rule_path, EvalConfig(directories=[]))
+
+        mock_graph.invoke.assert_not_called()
+        assert result.status == "skipped"
+        assert "no non-private rule" in (result.error or "")
+
     def test_generic_artifact_filename_passed_to_yara(self, tmp_path):
         """_run_one must pass the exact generated filename as the binary arg to YARA."""
         rule_path = self._write_rule(
@@ -2125,8 +2196,8 @@ class TestEvaluatorRunOne:
             f"Generic scan must use normalized_rule.yar; got: {scan_rule_arg.name}"
         )
 
-    def test_pe_artifact_scanned_with_original_rule(self, tmp_path):
-        """PE artifacts must continue to use the original rule file (existing behaviour)."""
+    def test_pe_artifact_scanned_with_normalized_rule(self, tmp_path):
+        """PE artifacts must be scanned with the selected normalized rule."""
         rule_path = self._write_rule(
             tmp_path, "pe_test",
             "    condition:\n        uint16(0) == 0x5A4D"
@@ -2142,6 +2213,9 @@ class TestEvaluatorRunOne:
             import aray.compiler as _c
             _c.BUILD_DIR_WIN.mkdir(parents=True, exist_ok=True)
             (_c.BUILD_DIR_WIN / "app.exe").write_bytes(b"MZ" + b"\x00" * 62)
+            (_c.BUILD_DIR_WIN / "normalized_rule.yar").write_text(
+                "rule pe_test { condition: true }"
+            )
 
         mock_graph = MagicMock()
         mock_graph.invoke.side_effect = fake_invoke_pe
@@ -2154,7 +2228,7 @@ class TestEvaluatorRunOne:
 
         assert len(yara_calls) == 1
         scan_rule_arg, binary_arg = yara_calls[0]
-        assert scan_rule_arg == rule_path, "PE must scan with original rule_path"
+        assert scan_rule_arg.name == "normalized_rule.yar"
         assert binary_arg.name == "app.exe"
 
     def test_no_artifact_produces_failed_result(self, tmp_path):

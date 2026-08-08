@@ -24,6 +24,14 @@ from aray.evaluator import (
     _yara_scan,
     parse_args,
 )
+from aray.yara_source import (
+    AmbiguousRuleError,
+    NoPublicRuleError,
+    RuleDependencyCycleError,
+    UnresolvedRuleError,
+    select_yara_file,
+    select_yara_source,
+)
 
 
 # ---------------------------------------------------------------------------
@@ -189,9 +197,10 @@ class TestExtractFirstRuleText:
         result = _extract_first_rule_text(self._MULTI)
         assert result.startswith('rule First')
 
-    def test_no_rule_returns_text_unchanged(self):
+    def test_no_rule_never_falls_back_to_text(self):
         text = '/* no rules here */'
-        assert _extract_first_rule_text(text) == text
+        with pytest.raises(NoPublicRuleError):
+            _extract_first_rule_text(text)
 
     def test_hex_braces_not_miscounted(self):
         text = 'rule Hex { strings: $a = { DE AD BE EF } condition: $a }'
@@ -208,11 +217,10 @@ class TestExtractFirstRuleText:
         result = _extract_first_rule_text(text)
         assert result == text
 
-    def test_private_rule_only_falls_back_to_text(self):
+    def test_private_rule_only_is_explicit(self):
         text = 'private rule Hidden { condition: true }'
-        # Only rule is private — no public rule to return; falls back to full text
-        result = _extract_first_rule_text(text)
-        assert result == text
+        with pytest.raises(NoPublicRuleError):
+            _extract_first_rule_text(text)
 
     def test_private_rule_skipped_returns_next_public(self):
         text = (
@@ -263,6 +271,236 @@ class TestExtractFirstRuleName:
 
     def test_empty_string(self):
         assert _extract_first_rule_name("") is None
+
+    def test_private_then_public_returns_public_name(self):
+        text = "private rule Helper { condition: true } rule Public { condition: true }"
+        assert _extract_first_rule_name(text) == "Public"
+
+
+class TestYaraSourceSelector:
+    def test_fake_headers_in_comments_strings_and_regex_are_ignored(self):
+        text = r'''
+            // rule Comment { condition: true }
+            /* private rule Block { condition: true } */
+            rule Real {
+                strings:
+                    $a = "rule String { condition: true }"
+                    $b = /rule Regex \{ condition: true \}/
+                condition: any of them
+            }
+            rule Later { condition: true }
+        '''
+        selected = select_yara_source(text)
+        assert selected.name == "Real"
+        assert "rule Later" not in selected.text
+
+    def test_retains_import_directives(self):
+        text = 'import "pe"\nimport "hash"\nrule UsesImport { condition: pe.is_pe }'
+        selected = select_yara_source(text)
+        assert selected.text.startswith('import "pe"\nimport "hash"')
+
+    def test_same_file_dependency_is_inlined(self):
+        text = '''
+            private rule Helper {
+                strings: $needle = "helper"
+                condition: $needle
+            }
+            rule Public {
+                strings: $own = "public"
+                condition: Helper and $own
+            }
+        '''
+        selected = select_yara_source(text)
+        assert "rule Helper" not in selected.text
+        assert "$__Helper_needle = \"helper\"" in selected.text
+        assert "($__Helper_needle) and $own" in selected.text
+
+    def test_helper_them_scope_does_not_include_selected_strings(self):
+        text = '''
+            private rule Helper {
+                strings: $h = "helper"
+                condition: any of them
+            }
+            rule Public {
+                strings: $p = "public"
+                condition: Helper and $p
+            }
+        '''
+        selected = select_yara_source(text)
+        assert "any of ($__Helper_h)" in selected.text
+        assert "any of them" not in selected.text
+
+    def test_anonymous_helper_strings_are_named_and_scoped(self):
+        text = '''
+            private rule Helper {
+                strings: $ = "one" $ = "two"
+                condition: any of them
+            }
+            rule Public { condition: Helper }
+        '''
+        selected = select_yara_source(text)
+        assert "$__Helper_anon_1 = \"one\"" in selected.text
+        assert "$__Helper_anon_2 = \"two\"" in selected.text
+        assert "any of ($__Helper_anon_1, $__Helper_anon_2)" in selected.text
+
+    def test_selected_anonymous_strings_are_named_before_normalization(self):
+        text = '''
+            rule Public {
+                strings: $ = "one" $ = "two"
+                condition: 1 of them
+            }
+            rule Later { condition: true }
+        '''
+        selected = select_yara_source(text)
+        assert "$__aray_anon_1 = \"one\"" in selected.text
+        assert "$__aray_anon_2 = \"two\"" in selected.text
+        assert "rule Later" not in selected.text
+        assert "1 of them" in selected.text
+
+    def test_private_global_rule_is_an_implicit_dependency(self):
+        text = '''
+            private global rule Gate {
+                strings: $g = "gate"
+                condition: $g
+            }
+            rule Public {
+                strings: $p = "public"
+                condition: $p
+            }
+        '''
+        selected = select_yara_source(text)
+        assert "$__Gate_g = \"gate\"" in selected.text
+        assert "($__Gate_g) and ($p)" in selected.text
+
+    def test_scoping_them_does_not_rewrite_condition_literals(self):
+        text = '''
+            private rule Helper {
+                strings: $h = "helper"
+                condition: any of them and "any of them" contains "them"
+            }
+            rule Public { condition: Helper }
+        '''
+        selected = select_yara_source(text)
+        assert '"any of them" contains "them"' in selected.text
+        assert "any of ($__Helper_h)" in selected.text
+
+    def test_helper_string_names_are_collision_free(self):
+        text = '''
+            private rule Helper { strings: $x = "x" condition: $x }
+            rule Public {
+                strings: $__Helper_x = "occupied"
+                condition: Helper and $__Helper_x
+            }
+        '''
+        selected = select_yara_source(text)
+        assert "$__Helper_x_2 = \"x\"" in selected.text
+        assert "($__Helper_x_2)" in selected.text
+
+    def test_helper_count_offset_and_length_references_are_renamed(self):
+        text = '''
+            private rule Helper {
+                strings: $a = "x"
+                condition: #a > 0 and @a[1] >= 0 and !a[1] == 1
+            }
+            rule Public { condition: Helper }
+        '''
+        selected = select_yara_source(text)
+        assert "#__Helper_a" in selected.text
+        assert "@__Helper_a[1]" in selected.text
+        assert "!__Helper_a[1]" in selected.text
+
+    def test_rule_set_dependency_selects_sufficient_reachable_subset(self):
+        text = '''
+            private rule dep_one { strings: $a = "one" condition: $a }
+            private rule dep_two { strings: $b = "two" condition: $b }
+            rule Public { condition: 1 of (dep_*) }
+        '''
+        selected = select_yara_source(text)
+        assert "$__dep_one_a = \"one\"" in selected.text
+        assert "$__dep_two_b" not in selected.text
+        assert "dep_*" not in selected.text
+
+    @pytest.mark.parametrize(
+        ("quantifier", "expected"),
+        [
+            ("0", "not ($__dep_one_a) and not ($__dep_two_b)"),
+            ("50%", "$__dep_one_a"),
+        ],
+    )
+    def test_rule_set_zero_and_percentage_quantifiers(self, quantifier, expected):
+        text = f'''
+            private rule dep_one {{ strings: $a = "one" condition: $a }}
+            private rule dep_two {{ strings: $b = "two" condition: $b }}
+            rule Public {{ condition: {quantifier} of (dep_*) }}
+        '''
+        selected = select_yara_source(text)
+        assert expected in selected.text
+
+    def test_rule_set_dependency_can_resolve_sibling_files(self, tmp_path):
+        (tmp_path / "one.yar").write_text(
+            'private rule dep_one { strings: $a = "one" condition: $a }'
+        )
+        (tmp_path / "two.yar").write_text(
+            'private rule dep_two { strings: $b = "two" condition: $b }'
+        )
+        target = tmp_path / "target.yar"
+        target.write_text("rule Public { condition: 1 of (dep_*) }")
+        selected = select_yara_file(target)
+        assert "$__dep_one_a = \"one\"" in selected.text
+        assert "dep_*" not in selected.text
+
+    def test_transitive_dependencies_are_deterministic(self):
+        text = '''
+            private rule Leaf { strings: $x = "leaf" condition: $x }
+            private rule Middle { condition: Leaf }
+            rule Public { condition: Middle }
+        '''
+        first = select_yara_source(text).text
+        assert first == select_yara_source(text).text
+        assert "$__Leaf_x = \"leaf\"" in first
+        assert "(($__Leaf_x))" in first
+
+    def test_cycle_is_explicit(self):
+        text = '''
+            private rule A { condition: B }
+            private rule B { condition: A }
+            rule Public { condition: A }
+        '''
+        with pytest.raises(RuleDependencyCycleError, match="A -> B -> A"):
+            select_yara_source(text)
+
+    def test_unresolved_dependency_is_explicit(self):
+        with pytest.raises(UnresolvedRuleError, match="Missing"):
+            select_yara_source("rule Public { condition: Missing }")
+
+    def test_resolver_can_supply_external_dependency(self):
+        external = 'private rule External { strings: $x = "ext" condition: $x }'
+        selected = select_yara_source(
+            "rule Public { condition: External }",
+            resolver=lambda name: external if name == "External" else None,
+        )
+        assert "$__External_x = \"ext\"" in selected.text
+
+    def test_file_selector_resolves_unique_sibling_dependency(self, tmp_path):
+        (tmp_path / "common.yar").write_text(
+            'private rule External { strings: $x = "ext" condition: $x }'
+        )
+        target = tmp_path / "target.yar"
+        target.write_text("rule Public { condition: External }")
+
+        selected = select_yara_file(target)
+
+        assert selected.name == "Public"
+        assert "$__External_x = \"ext\"" in selected.text
+
+    def test_duplicate_dependency_is_ambiguous(self):
+        text = '''
+            private rule Helper { condition: true }
+            private rule Helper { condition: false }
+            rule Public { condition: Helper }
+        '''
+        with pytest.raises(AmbiguousRuleError, match="multiple declarations"):
+            select_yara_source(text)
 
 
 # ---------------------------------------------------------------------------

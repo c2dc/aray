@@ -88,7 +88,7 @@ Use the artifacts to exercise:
 
 ### The model interprets
 
-Complex rules may be normalized and judged by an LLM. Strings, formats, offsets, and integer checks are extracted into Pydantic models.
+Complex rules may be normalized and judged by an LLM. Deterministic canonicalization restores retained fixed values and derives linear hex witnesses before judging. Strings, formats, offsets, and integer checks are extracted into Pydantic models.
 
 </div>
 
@@ -146,6 +146,10 @@ Generated sources and normalized rules remain available in the build directory f
 ## Published Evaluation
 
 Aray was evaluated against 416 public rules from the Yara-Rules community repository. End-to-end success means the generated artifact produced an actual match when scanned by the YARA CLI.
+
+The latest full normalization-only run with GLM-5.2 Cloud accepted **415/416 rules (99.8%)**. Its remaining fixed-literal transcription failure passed a later isolated retest after canonicalization was generalized; a new `416/416` full-corpus run is not claimed.
+
+On a separate targeted GPT-4.1 retest through the official OpenAI endpoint, the current pipeline recovered **17/21 previously non-passed cases (81.0%)**. Four complex regex witnesses remained invalid. This targeted recovery is reported separately from full-corpus metrics.
 
 | Model | Build mode | Matches | Success rate |
 |---|---|---:|---:|

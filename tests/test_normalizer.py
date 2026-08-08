@@ -189,7 +189,10 @@ class TestNormalizeRulePrompt:
         assert "Do NOT decode or reinterpret hex-looking regex text" in sys_content
 
     def test_retry_includes_expensive_branch_feedback(self):
-        original = f"rule R {{ condition: {self._RULE10_CONDITION} }}"
+        original = (
+            'rule R { strings: $x1 = "x" $s3 = "a" $s4 = "b" '
+            f"condition: {self._RULE10_CONDITION} }}"
+        )
         expensive = "rule R { strings: $x1 = \"x\" condition: uint16(0) == 0x5a4d and filesize < 2KB and $x1 }"
         cheap = "rule R { strings: $s3 = \"a\" $s4 = \"b\" condition: $s3 and $s4 }"
         responses = iter([
@@ -303,7 +306,7 @@ class TestJudgeNormalization:
         with patch("aray.nodes._invoke_llm", side_effect=_capture_invoke):
             _judge_normalization(
                 "rule Orig { condition: true }",
-                "rule Norm { condition: true }",
+                "rule Orig { condition: true }",
                 MagicMock(),
                 use_structured=False,
             )
@@ -368,6 +371,18 @@ class TestRunOne:
 
         assert result.status == "skipped"
         assert result.normalized_rule is None
+        assert result.output_path is None
+
+    def test_skipped_when_file_has_only_private_rules(self, tmp_path):
+        rule = tmp_path / "private.yar"
+        rule.write_text('private rule Helper { condition: true }')
+        cfg = self._make_config(str(tmp_path / "out"))
+
+        with patch("aray.normalizer._normalize_one_rule") as normalize:
+            result = _run_one(rule, tmp_path, cfg, MagicMock(), MagicMock())
+
+        normalize.assert_not_called()
+        assert result.status == "skipped"
         assert result.output_path is None
 
     def test_successful_normalization_writes_output(self, tmp_path):
@@ -470,6 +485,141 @@ class TestRunOne:
         expected_out = output_root / "rules" / "Simple.yar"
         assert expected_out.exists()
         assert expected_out.read_text() == rule_text
+
+    def test_only_first_public_rule_is_sent_to_normalizer(self, tmp_path):
+        rule = tmp_path / "rules" / "Multi.yar"
+        rule.parent.mkdir()
+        rule.write_text(
+            'private rule Helper { strings: $h = "helper" condition: $h }\n'
+            'rule First { strings: $a = /first[0-9]+/ condition: Helper and $a }\n'
+            'rule Later { strings: $b = /later.*/ condition: $b }\n'
+        )
+        cfg = self._make_config(str(tmp_path / "out"))
+        candidate = '''rule First {
+strings:
+    $a = "first0"
+    $__Helper_h = "helper"
+condition:
+    $__Helper_h and $a
+}'''
+        verdict = JudgeVerdict(verdict="passed", reason="OK")
+
+        with (
+            patch("aray.normalizer._normalize_one_rule", return_value=candidate) as normalize,
+            patch("aray.normalizer._judge_normalization", return_value=verdict),
+        ):
+            result = _run_one(rule, rule.parent, cfg, MagicMock(), MagicMock())
+
+        selected = normalize.call_args.args[0]
+        assert "rule First" in selected
+        assert "rule Helper" not in selected
+        assert "rule Later" not in selected
+        assert "$__Helper_h" in selected
+        assert result.status == "passed"
+
+    def test_failed_attempt_is_retried_and_only_passed_candidate_is_written(self, tmp_path):
+        rule = tmp_path / "rules" / "Retry.yar"
+        rule.parent.mkdir()
+        rule.write_text('rule Retry { strings: $a = /a+/ condition: $a }')
+        output_root = tmp_path / "out"
+        cfg = self._make_config(str(output_root))
+        rejected = 'rule Retry { strings: $a = "b" condition: $a }'
+        accepted = 'rule Retry { strings: $a = "a" condition: $a }'
+
+        with (
+            patch(
+                "aray.normalizer._normalize_one_rule",
+                side_effect=[rejected, accepted],
+            ) as normalize,
+            patch(
+                "aray.normalizer._judge_normalization",
+                side_effect=[
+                    JudgeVerdict(verdict="failed", reason="bad witness"),
+                    JudgeVerdict(verdict="passed", reason="OK"),
+                ],
+            ),
+        ):
+            result = _run_one(rule, rule.parent, cfg, MagicMock(), MagicMock())
+
+        assert normalize.call_count == 2
+        assert result.status == "passed"
+        assert result.normalized_rule == accepted
+        assert Path(result.output_path).read_text() == accepted
+
+    def test_failed_run_removes_stale_output(self, tmp_path):
+        rule = tmp_path / "rules" / "Failed.yar"
+        rule.parent.mkdir()
+        rule.write_text('rule Failed { strings: $a = /a+/ condition: $a }')
+        output_root = tmp_path / "out"
+        stale = output_root / "rules" / "Failed.yar"
+        stale.parent.mkdir(parents=True)
+        stale.write_text("stale")
+        cfg = self._make_config(str(output_root))
+        verdict = JudgeVerdict(verdict="failed", reason="invalid")
+
+        with (
+            patch(
+                "aray.normalizer._normalize_one_rule",
+                return_value='rule Failed { strings: $a = "bad" condition: $a }',
+            ),
+            patch("aray.normalizer._judge_normalization", return_value=verdict),
+        ):
+            result = _run_one(rule, rule.parent, cfg, MagicMock(), MagicMock())
+
+        assert result.status == "failed"
+        assert result.output_path is None
+        assert not stale.exists()
+
+    def test_unresolved_dependency_returns_error_instead_of_escaping(self, tmp_path):
+        rule = tmp_path / "rules" / "Missing.yar"
+        rule.parent.mkdir()
+        rule.write_text("rule Missing { condition: UnknownHelper }")
+        cfg = self._make_config(str(tmp_path / "out"))
+
+        result = _run_one(rule, rule.parent, cfg, MagicMock(), MagicMock())
+
+        assert result.status == "error"
+        assert "UnknownHelper" in (result.error or "")
+
+    def test_exception_removes_stale_output(self, tmp_path):
+        rule = tmp_path / "rules" / "Error.yar"
+        rule.parent.mkdir()
+        rule.write_text('rule Error { strings: $a = /a+/ condition: $a }')
+        output_root = tmp_path / "out"
+        stale = output_root / "rules" / "Error.yar"
+        stale.parent.mkdir(parents=True)
+        stale.write_text("stale")
+        cfg = self._make_config(str(output_root))
+
+        with patch(
+            "aray.normalizer._normalize_one_rule", side_effect=RuntimeError("boom")
+        ):
+            result = _run_one(rule, rule.parent, cfg, MagicMock(), MagicMock())
+
+        assert result.status == "error"
+        assert not stale.exists()
+
+    def test_transient_errors_are_retried(self, tmp_path):
+        rule = tmp_path / "rules" / "Transient.yar"
+        rule.parent.mkdir()
+        rule.write_text('rule Transient { strings: $a = /a+/ condition: $a }')
+        cfg = self._make_config(str(tmp_path / "out"))
+        accepted = 'rule Transient { strings: $a = "a" condition: $a }'
+
+        with (
+            patch(
+                "aray.normalizer._normalize_one_rule",
+                side_effect=[ConnectionError("closed"), accepted],
+            ) as normalize,
+            patch(
+                "aray.normalizer._judge_normalization",
+                return_value=JudgeVerdict(verdict="passed", reason="OK"),
+            ),
+        ):
+            result = _run_one(rule, rule.parent, cfg, MagicMock(), MagicMock())
+
+        assert normalize.call_count == 2
+        assert result.status == "passed"
 
 
 # ---------------------------------------------------------------------------

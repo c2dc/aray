@@ -11,18 +11,21 @@ The published experiments used 416 rules from [Yara-Rules/rules](https://github.
 
 ### Normalization
 
-Two normalization-only runs used the same 416-rule corpus and one worker. In
-each run, the normalization model also acted as the judge.
+The normalization-only runs used the same 416-rule corpus and one worker. In
+each run, the normalization model also acted as the judge. The GLM-5.2 result
+below is the fourth hardening run; the GPT-4.1 result is the earlier published
+baseline, so the rows represent different pipeline revisions rather than a
+controlled model-only comparison.
 
 | Metric | GPT-4.1 | GLM-5.2 Cloud |
 |---|---:|---:|
 | Corpus size | 416 | 416 |
-| Deterministic fast path | 179 (43.0%) | 179 (43.0%) |
-| Rules sent to the model | 237 | 237 |
-| Accepted after model call | 225 / 237 (94.9%) | 233 / 237 (98.3%) |
-| Failed normalization | 12 | 4 |
-| Total accepted | 404 / 416 (97.1%) | 412 / 416 (99.0%) |
-| Reported duration, one worker | 2031.920 s | 3221.641 s |
+| Deterministic fast path | 179 (43.0%) | 182 (43.8%) |
+| Rules sent to the model | 237 | 234 |
+| Accepted after model call | 225 / 237 (94.9%) | 233 / 234 (99.6%) |
+| Failed normalization | 12 | 1 |
+| Total accepted | 404 / 416 (97.1%) | 415 / 416 (99.8%) |
+| Reported duration, one worker | 2031.920 s | 2454.327 s |
 
 [`glm-5.2:cloud`](https://ollama.com/library/glm-5.2) was accessed through the
 Ollama client running locally at `http://localhost:11434/v1`; inference ran in
@@ -30,10 +33,57 @@ Ollama Cloud. GPT-4.1 inference was also cloud-hosted. This comparison is
 therefore between two remotely hosted models, not between local and cloud
 inference.
 
-The four GLM-5.2 failures comprised one CVE rule, two malware rules, and one
-exploit-kit rule. The judge identified two outputs missing the YARA `rule`
-keyword, one incorrect rewrite of anonymous-string count semantics, and one
-defined string left unreferenced.
+The fourth GLM-5.2 run is recorded in
+`evaluation/reports/2026-08-08T05-15-46-glm-5.2-4-round/norm_report.json`.
+Its only failure was `CVE_2012_0158_KeyBoy`: the model changed a retained
+252-character fixed literal to 300 characters. The deterministic validator
+rejected the change. Aray now canonicalizes retained declarations by original
+type: fixed literals and fixed hex sequences are restored exactly, while
+linear hex wildcards and jumps are resolved to canonical witnesses. Regex and
+complex-hex witnesses remain subject to `yara-python` validation.
+
+This generalized repair was validated with an isolated GLM-5.2 rerun of
+`CVE-2012-0158.yar`, which passed. The prior `Ponmocup` failure also passed both
+the fourth corpus run and its isolated retest after `[29]` was expanded
+deterministically to exactly 29 bytes. These targeted results verify the two
+repairs, but they are not reported as a new `416/416` corpus run.
+
+#### Targeted GPT-4.1 Failure Retest
+
+The current pipeline was also tested against only the 21 non-passed cases from
+`evaluation/reports/2026-08-07T18-31-30-gpt-4.1/norm_report.json`. That
+historical development run recorded 395 passed rules, 19 normalization
+failures, and 2 connection errors. The retest used GPT-4.1 for normalization
+and judging, one worker, and the official OpenAI endpoint at
+`https://api.openai.com/v1`.
+
+| Original status | Retested | Recovered | Still failed |
+|---|---:|---:|---:|
+| Failed normalization | 19 | 15 | 4 |
+| Connection error | 2 | 2 | 0 |
+| **Total** | **21** | **17 (81.0%)** | **4 (19.0%)** |
+
+The retest completed in 124.308 seconds with no provider or transport errors.
+All 17 accepted outputs passed an additional deterministic validation pass.
+Substituting the targeted outcomes into the historical report would produce
+412 accepted rules out of 416 (99.0%), but this projection is not a new
+full-corpus result.
+
+All four remaining failures were rejected regex witnesses:
+
+- `TRITON_ICS_FRAMEWORK`: omitted the required `(Hi|Low|Base)` alternative and
+  trailing character from `/import Ts(Hi|Low|Base)[^:alpha:]/`;
+- `PoS_Malware_MalumPOS`: supplied 20 wildcard characters but omitted the
+  additional literal dot required by `.{20,300}\.pas`;
+- `jjEncode`: did not satisfy the required `=~[];` prefix structure or the
+  final non-whitespace repetition;
+- `Weevely_Webshell`: omitted the opening quote and 70 required alphanumeric
+  characters from `/\$[a-z]{4}="[a-zA-Z0-9]{70}/`.
+
+This is the remaining boundary of the deterministic repair strategy: fixed
+values and linear hex patterns are canonicalized, while regex witnesses are
+kept model-generated and accepted only when `yara-python` proves that they
+match the original expression.
 
 These are self-judged acceptance rates: GPT-4.1 judged GPT-4.1 outputs and
 GLM-5.2 judged GLM-5.2 outputs. They are useful for measuring each configured
@@ -225,7 +275,7 @@ directories replace the configured input list. Despite its legacy name, the
 TOML `directories` list also accepts individual `.yar` files. API keys are
 never printed or included in reports.
 
-Index files named `index.yar`, `*_index.yar`, or `index_*.yar`, and files beginning with an `include` directive, are skipped. Rulesets process only the first non-private rule.
+Index files named `index.yar`, `*_index.yar`, or `index_*.yar`, and files beginning with an `include` directive, are skipped. Rulesets process only the first non-private rule, with reachable helpers inlined into one standalone rule. Every backend is scanned with that normalized rule rather than the original ruleset.
 
 ### Report Shape
 

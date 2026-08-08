@@ -62,6 +62,8 @@ uv run pytest -m llm -v
   - `models.py` — Pydantic models: `NormalizedYaraRule`, `YaraStringEntry`, `YaraStrings`, `YaraConstantEntry`, `YaraConstants`, `JudgeVerdict`.
   - `state.py` — `ArayGraphState` TypedDict.
   - `llm.py` — `_invoke_llm()` helper.
+  - `yara_source.py` — lexical first-rule selector and dependency inliner. Selects the first non-private rule, resolves reachable same-file/sibling rule references (including rule sets), preserves imports/global constraints, and assigns stable names to anonymous strings.
+  - `yara_validation.py` — deterministic syntax and semantic checks plus safe candidate canonicalization for headers, modifiers, anonymous aliases, counts, retained fixed literals/hex values, linear hex witnesses, regex witnesses, and complex hex witnesses.
   - `codegen.py` — GNU assembler source and linker script generators, plus the PE offset-aware C-source generator (`generate_pe_offset_c_source()`, `build_pe_offset_blob()`).
   - `compiler.py` — `_is_pe_rule()`, `_patch_constants()`, `_compile_pe_binary()` (dispatches to `_compile_pe_with_offsets()` when a string carries an `at` offset), `compile_binary()` (accepts `scan_only` kwarg).
   - `artifact_writer.py` — Raw binary writers for `--scan-only` mode: `write_linux_artifact()` (minimal ELF64, strings at exact file offsets, non-nested constants patched) and `write_pe_artifact()` (minimal PE64, `NumberOfSections=0`, strings at exact file offsets, non-nested constants patched).
@@ -79,10 +81,10 @@ START → read_yara → check_normalization_needed ─ needs=True  → normalize
 ```
 
 **Pipeline nodes:**
-- `read_yara`: Reads the YARA rule from the path provided via CLI. For rulesets, extracts the first non-private rule block.
-- `check_normalization_needed`: Deterministic (zero-LLM) regex check for features that need the LLM loop — regex strings, hex wildcards (`??`) / jumps (`[N]`/`[N-M]`), `or` conditions, and numeric count expressions (`N of …`). Sets `needs_normalization`; when `False` passes the raw rule straight through as `normalized_rule` and skips the LLM loop.
+- `read_yara`: Reads the YARA rule from the path provided via CLI. For rulesets, selects the first non-private rule and deterministically inlines only its reachable dependencies into one standalone rule; later unrelated rules are never sent to the LLM. Anonymous strings are named `$__aray_anon_N` before normalization.
+- `check_normalization_needed`: Deterministic (zero-LLM) lexical check for features that need the LLM loop — regex strings, full/partial hex wildcards (`??`, `A?`, `?B`) / jumps (`[N]`/`[N-M]`), `or` conditions, and numeric count expressions (`N of …`). Sets `needs_normalization`; when `False` validates and passes the selected standalone rule through as `normalized_rule`.
 - `normalize_rule`: Uses an LLM (default: GPT-4.1) to generate a minimal constructible subset of the original. It removes regex conditions, replaces complex count expressions (e.g. `5 of ($a*)`) with explicit string lists, and selects complete `or` branches using YARA precedence plus a feasibility/cost ranking (filesize, padding, offsets, format constraints, and required evidence). Downstream nodes operate on `normalized_rule`.
-- `judge_rule`: Deterministically validates retained regex replacements with `yara-python`, then uses the LLM to verify the normalized rule is a valid, correct subset and did not select a clearly more expensive branch over a cheaper constructible alternative. A failed regex witness or judge verdict retries `normalize_rule` (up to 3 attempts) or routes to `fail_normalization` when exhausted.
+- `judge_rule`: Deterministically validates syntax, retained modifiers/values, count expansions, and regex/hex witnesses with `yara-python`; supported complete count expansions bypass the LLM judge when proven. Remaining cases use the LLM judge. A failed check or verdict retries `normalize_rule` (up to 3 attempts) or routes to `fail_normalization` when exhausted.
 - `fail_normalization`: Terminal node reached when all normalization attempts fail; writes `normalization_error` and exits to END without extraction/compilation.
 - `extract_strings`: Uses an LLM to extract strings (ASCII/hex/widechar) and their `at` offset constraints; sets `format="widechar"` for strings with the YARA `wide` modifier
 - `extract_constants`: Uses an LLM to extract `uint16`/`uint32` integer comparisons from the condition section, recording each constant's `value`, `offset`, `size` (2 or 4 bytes), and `is_nested` flag

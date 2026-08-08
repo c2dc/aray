@@ -32,7 +32,7 @@ $ yara data/rules/rule0.yar build/linux/app
 rule0 build/linux/app
 ```
 
-Validated on **416 real-world rules** from the [Yara-Rules community repository](https://github.com/Yara-Rules/rules): GLM-5.2 Cloud matched **353/416 (84.9%)** through the complete pipeline and full-compile backends, compared with **330/416 (79.3%)** for GPT-4.1 in the same build mode. GPT-4.1 matched **344/416 (82.7%)** in scan-only mode, while the fully local phi4:14b configuration matched **294/416 (70.7%)**. A separate fully local experiment with the smaller Qwen3.5:9b model synthesized and validated **137/416 artifacts (32.9%)** using the full-compile backends. In normalization-only runs, GLM-5.2 accepted **412/416 (99.0%)**, compared with **404/416 (97.1%)** for GPT-4.1.
+Validated on **416 real-world rules** from the [Yara-Rules community repository](https://github.com/Yara-Rules/rules): GLM-5.2 Cloud matched **353/416 (84.9%)** through the complete pipeline and full-compile backends, compared with **330/416 (79.3%)** for GPT-4.1 in the same build mode. GPT-4.1 matched **344/416 (82.7%)** in scan-only mode, while the fully local phi4:14b configuration matched **294/416 (70.7%)**. A separate fully local experiment with the smaller Qwen3.5:9b model synthesized and validated **137/416 artifacts (32.9%)** using the full-compile backends. In the latest normalization-only corpus run, GLM-5.2 accepted **415/416 (99.8%)**; the remaining case subsequently passed an isolated retest after deterministic value canonicalization was generalized.
 
 > [!WARNING]
 > Aray is a research prototype under active development. APIs, CLI flags, supported YARA constructs, and artifact formats may change.
@@ -131,7 +131,7 @@ Aray separates probabilistic interpretation from deterministic artifact construc
   <img src="docs/site/diagrams/aray-pipeline-determinism-flow.svg" width="760" alt="Aray control flow showing the LLM-assisted interpretation boundary and deterministic construction stages" />
 </p>
 
-1. **Read and classify the rule deterministically.** Aray extracts the first non-private rule and checks whether unsupported complex constructs require normalization.
+1. **Read and classify the rule deterministically.** Aray selects the first non-private rule, inlines only its reachable rule dependencies into one standalone rule, and checks whether complex constructs require normalization.
 2. **Interpret the rule with constrained LLM calls.** Only rules containing features such as regex strings, hex wildcards or jumps, `or`, or numeric `N of` expressions enter the normalization-and-judge loop. All rules then use structured extraction for strings and integer constants.
 3. **Validate the representation.** Pydantic models constrain the response shape. Routing cross-checks critical offset-zero claims against the rule text rather than blindly trusting extracted data.
 4. **Construct the artifact deterministically.** Python code assigns offsets, encodes ASCII/hex/wide strings, routes the target format, generates source or binary structures, patches constants, and applies file-size constraints.
@@ -175,8 +175,8 @@ Read [Architecture](docs/site/architecture.md) for the layout contracts, routing
 
 Aray keeps the nondeterministic boundary narrow and explicit:
 
-- **Normalization:** complex YARA constructs are simplified into a constructible subset supported by the backends. For `or` conditions, YARA precedence is preserved and complete branches are ranked by feasibility, filesize/padding cost, offset and format constraints, and required evidence. A deterministic pre-check skips this phase for already-supported rules. In the 416-rule evaluation, 179 rules (43%) skipped normalization, though they still used structured extraction.
-- **Judging:** retained regex replacements are first tested against the original pattern with `yara-python`; a model then verifies subset correctness and rejects clearly more expensive branches when a cheaper constructible alternative exists. A failed verdict retries normalization up to three times; three failures stop the pipeline before extraction or construction. An `uncertain` verdict currently proceeds.
+- **Normalization:** complex YARA constructs are simplified into a constructible subset supported by the backends. For `or` conditions, YARA precedence is preserved and complete branches are ranked by feasibility, filesize/padding cost, offset and format constraints, and required evidence. A deterministic pre-check skips this phase for already-supported rules. In the latest 416-rule normalization run, 182 rules (43.8%) skipped the model loop, though they would still use structured extraction in the complete pipeline.
+- **Judging:** before the model judge runs, Aray restores retained fixed literals and fixed hex values from the original rule, derives canonical witnesses for linear hex wildcards and jumps, and validates regex and complex-hex witnesses with `yara-python`. A model then verifies remaining subset semantics and branch cost. A failed verdict retries normalization up to three times; three failures stop the pipeline before extraction or construction. An `uncertain` verdict currently proceeds.
 - **Structured extraction:** the model returns strings, formats, offsets, and integer checks through Pydantic schemas. Structured output is attempted first, with a validated prompt-based JSON fallback for models without tool-call support.
 
 Schema validation guarantees structure, not semantic correctness. Extraction mistakes remain possible, which is why corpus evaluation uses the YARA engine as an external oracle. Different models can be assigned to normalization and extraction, including local OpenAI-compatible models.
@@ -228,14 +228,16 @@ This result establishes a local baseline rather than a direct comparison with ph
 
 The GLM-5.2 full-compile run processed the original rules through the complete pipeline with `glm-5.2:cloud` assigned to normalization, judging, and extraction. The scan-only and Qwen experiments reused the stored GPT-4.1-normalized corpus. Build modes are reported separately because scan-only avoids compiler behavior and does not promise runnable artifacts.
 
-The normalization-only comparison used GPT-4.1 and [`glm-5.2:cloud`](https://ollama.com/library/glm-5.2) over the same original corpus:
+The normalization-only results used GPT-4.1 and [`glm-5.2:cloud`](https://ollama.com/library/glm-5.2) over the same original corpus. The GLM row is the latest hardening run; the GPT-4.1 row is the earlier published baseline and therefore used an earlier pipeline revision:
 
 | Normalization model | Deterministic fast path | Accepted after model call | Failed | Total accepted |
 |---|---:|---:|---:|---:|
 | GPT-4.1 | 179 | 225 / 237 (94.9%) | 12 | 404 / 416 (97.1%) |
-| GLM-5.2 Cloud | 179 | 233 / 237 (98.3%) | 4 | 412 / 416 (99.0%) |
+| GLM-5.2 Cloud | 182 | 233 / 234 (99.6%) | 1 | 415 / 416 (99.8%) |
 
-For GLM-5.2, Aray connected to the locally running Ollama client, while inference ran in Ollama Cloud. GPT-4.1 inference was also cloud-hosted, so this is not a local-versus-cloud comparison. Each model judged its own normalized outputs; these figures are self-judged acceptance rates rather than independent semantic validation.
+For GLM-5.2, Aray connected to the locally running Ollama client, while inference ran in Ollama Cloud. GPT-4.1 inference was also cloud-hosted, so this is not a local-versus-cloud comparison. Each model judged its own normalized outputs; these figures are self-judged acceptance rates rather than independent semantic validation. In the fourth GLM run, the only failure changed a retained 252-character literal to 300 characters. The generalized canonicalizer now restores retained fixed values directly from the original rule, and that case passed a subsequent isolated GLM retest. No fifth full-corpus run is claimed.
+
+A separate targeted GPT-4.1 retest used the current pipeline and the official OpenAI endpoint on the 21 non-passed cases from an earlier development report (395 passed, 19 failed, and 2 errored). It recovered **17/21 cases (81.0%)**: both connection errors and 15 of the 19 rejected normalizations. The four remaining failures were invalid regex witnesses in `TRITON_ICS_FRAMEWORK`, `PoS_Malware_MalumPOS`, `jjEncode`, and `Weevely_Webshell`. Substituting these targeted outcomes into that historical report would yield 412/416 (99.0%), but this is not presented as a new full-corpus run.
 
 The synthesis figures measure end-to-end YARA matches, not just valid model responses. See [Evaluation](docs/site/evaluation.md) for the collection breakdown, methodology, batch commands, and normalization evaluator.
 
@@ -261,7 +263,7 @@ ELF integration tests require GCC and YARA. PE integration tests require MinGW a
 - Runnable PE strings cannot be placed inside the PE header/code region, typically below about `0x400`; use `--scan-only` for such offsets.
 - `uint32(uint32(...))` is treated as a PE indicator and may misroute an unusual non-PE rule.
 - A file already larger than a rule's maximum `filesize` constraint cannot be reduced.
-- Rulesets currently process only the first non-private rule.
+- Rulesets process only the first non-private rule. Reachable helper-rule dependencies are inlined deterministically; unrelated and subsequent rules are never sent to the LLM.
 
 ## Documentation
 
