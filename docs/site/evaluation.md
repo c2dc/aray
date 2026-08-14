@@ -7,198 +7,68 @@ Aray includes two batch tools:
 
 ## Published Results
 
-The published experiments used 416 rules from [Yara-Rules/rules](https://github.com/Yara-Rules/rules), covering exploit kits, CVEs, malware families, webshells, packers, email, and cryptography.
+The only official published results are the following two full-compile reports
+over 416 rules from [Yara-Rules/rules](https://github.com/Yara-Rules/rules):
 
-### Normalization
+| Provider/model configuration | Official report | Passed | Failed | Success rate | Duration |
+|---|---|---:|---:|---:|---:|
+| GPT-4.1 | `evaluation/reports/2026-08-14T09-32-09-gpt-4.1/eval_report.json` | 404 | 12 | **97.1%** | 21m 52.6s |
+| GLM-5.2 Cloud (`glm-5.2:cloud`) | `evaluation/reports/2026-08-14T13-07-22-eval-glm-5.2/eval_report.json` | 404 | 12 | **97.1%** | 51m 10.5s |
 
-The normalization-only runs used the same 416-rule corpus and one worker. In
-each run, the normalization model also acted as the judge. The GLM-5.2 result
-below is the fourth hardening run; the GPT-4.1 result is the earlier published
-baseline, so the rows represent different pipeline revisions rather than a
-controlled model-only comparison.
+Both reports use exactly the same frozen input corpus and corpus hash:
+`evaluation/normalized-glm-5.2-stable` and
+`0ad4e608372828e1aaa996c6f1f15bd1629e4c8d4f087316f98b62caff5813a5`.
+The rules had already been normalized, and no result entered the normalization
+and judge loop. The reports measure
+compatibility of each configured provider with the pipeline, deterministic
+extraction, full-compile toolchains and backends, and final YARA verification.
+For supported fixed constructs, deterministic extraction is authoritative; an
+extraction-model response cannot override it.
 
-| Metric | GPT-4.1 | GLM-5.2 Cloud |
-|---|---:|---:|
-| Corpus size | 416 | 416 |
-| Deterministic fast path | 179 (43.0%) | 182 (43.8%) |
-| Rules sent to the model | 237 | 234 |
-| Accepted after model call | 225 / 237 (94.9%) | 233 / 234 (99.6%) |
-| Failed normalization | 12 | 1 |
-| Total accepted | 404 / 416 (97.1%) | 415 / 416 (99.8%) |
-| Reported duration, one worker | 2031.920 s | 2454.327 s |
+These results must not be read as a model normalization leaderboard or combined
+with earlier experiments, targeted reruns, or projections. Full-corpus runs with
+smaller models such as Phi and Qwen are planned, but no results are published for
+them yet.
 
-[`glm-5.2:cloud`](https://ollama.com/library/glm-5.2) was accessed through the
-Ollama client running locally at `http://localhost:11434/v1`; inference ran in
-Ollama Cloud. GPT-4.1 inference was also cloud-hosted. This comparison is
-therefore between two remotely hosted models, not between local and cloud
-inference.
+### Report Completeness and Environment
 
-The fourth GLM-5.2 run is recorded in
-`evaluation/reports/2026-08-08T05-15-46-glm-5.2-4-round/norm_report.json`.
-Its only failure was `CVE_2012_0158_KeyBoy`: the model changed a retained
-252-character fixed literal to 300 characters. The deterministic validator
-rejected the change. Aray now canonicalizes retained declarations by original
-type: fixed literals and fixed hex sequences are restored exactly, while
-linear hex wildcards and jumps are resolved to canonical witnesses. Regex and
-complex-hex witnesses remain subject to `yara-python` validation.
+Both official files use diagnostic schema 2.1 and contain all 416 per-rule
+records. Their metadata and serialized results agree on 404 passed, 12 failed,
+and zero skipped. The two runs used `scan_only=false`, structured output, one
+worker, the same recorded Git commit, and the same Linux, Python, YARA, GCC, and
+MinGW x86-64 environment. Both reports record a dirty worktree, so the commit ID
+alone does not fully identify the source snapshot.
 
-This generalized repair was validated with an isolated GLM-5.2 rerun of
-`CVE-2012-0158.yar`, which passed. The prior `Ponmocup` failure also passed both
-the fourth corpus run and its isolated retest after `[29]` was expanded
-deterministically to exactly 29 bytes. These targeted results verify the two
-repairs, but they are not reported as a new `416/416` corpus run.
+The environment did not contain `i686-w64-mingw32-gcc`. Two PE32 rules reached
+construction but could not produce an artifact for that reason. They remain
+failures in the observed 404/416 result; no adjusted success rate is published.
 
-#### Targeted GPT-4.1 Failure Retest
+### Official Failures
 
-The current pipeline was also tested against only the 21 non-passed cases from
-`evaluation/reports/2026-08-07T18-31-30-gpt-4.1/norm_report.json`. That
-historical development run recorded 395 passed rules, 19 normalization
-failures, and 2 connection errors. The retest used GPT-4.1 for normalization
-and judging, one worker, and the official OpenAI endpoint at
-`https://api.openai.com/v1`.
+The same 12 rules failed in both official runs:
 
-| Original status | Retested | Recovered | Still failed |
-|---|---:|---:|---:|
-| Failed normalization | 19 | 15 | 4 |
-| Connection error | 2 | 2 | 0 |
-| **Total** | **21** | **17 (81.0%)** | **4 (19.0%)** |
+| Category | Count | Official cases |
+|---|---:|---|
+| Unsupported YARA `pe.*` conditions | 7 | `APT_CrashOverride`, `APT_Shamoon_StoneDrill`, `MALW_Batel`, `MALW_IcedID`, `MALW_Pyinstaller`, `RANSOM_Stampado`, `peid` |
+| Infeasible whole-file hash predicates | 2 | `APT_Grasshopper`, `RAT_CrossRAT` |
+| Unsatisfiable out-of-range `uint32` equality | 1 | `APT_Derusbi` |
+| Missing i686 MinGW compiler | 2 | `RAT_FlyingKitten`, `packer_compiler_signatures` |
 
-The retest completed in 124.308 seconds with no provider or transport errors.
-All 17 accepted outputs passed an additional deterministic validation pass.
-Substituting the targeted outcomes into the historical report would produce
-412 accepted rules out of 416 (99.0%), but this projection is not a new
-full-corpus result.
+The seven `pe.*` cases require these module-level semantics:
 
-All four remaining failures were rejected regex witnesses:
+| Rule | Required `pe.*` semantics |
+|---|---|
+| `APT_CrashOverride` | `pe.characteristics`, `pe.exports` |
+| `APT_Shamoon_StoneDrill` | `pe.number_of_resources`, `pe.number_of_sections`, `pe.number_of_signatures`, `pe.resources` |
+| `MALW_Batel` | `pe.exports`, `pe.imports` |
+| `MALW_IcedID` | `pe.EXECUTABLE_IMAGE`, `pe.RELOCS_STRIPPED`, `pe.characteristics`, `pe.sections` |
+| `MALW_Pyinstaller` | `pe.number_of_resources` |
+| `RANSOM_Stampado` | `pe.characteristics`, `pe.imports`, `pe.number_of_sections`, `pe.sections` |
+| `peid` | `pe.entry_point` |
 
-- `TRITON_ICS_FRAMEWORK`: omitted the required `(Hi|Low|Base)` alternative and
-  trailing character from `/import Ts(Hi|Low|Base)[^:alpha:]/`;
-- `PoS_Malware_MalumPOS`: supplied 20 wildcard characters but omitted the
-  additional literal dot required by `.{20,300}\.pas`;
-- `jjEncode`: did not satisfy the required `=~[];` prefix structure or the
-  final non-whitespace repetition;
-- `Weevely_Webshell`: omitted the opening quote and 70 required alphanumeric
-  characters from `/\$[a-z]{4}="[a-zA-Z0-9]{70}/`.
-
-This is the remaining boundary of the deterministic repair strategy: fixed
-values and linear hex patterns are canonicalized, while regex witnesses are
-kept model-generated and accepted only when `yara-python` proves that they
-match the original expression.
-
-These are self-judged acceptance rates: GPT-4.1 judged GPT-4.1 outputs and
-GLM-5.2 judged GLM-5.2 outputs. They are useful for measuring each configured
-normalization pipeline, but they are not independent semantic validation. The
-duration values also include provider and network behavior from runs performed
-at different times, so they should not be treated as a controlled latency
-benchmark.
-
-The deterministic fast path skips normalization and judging, not extraction.
-The GLM-5.2 full-compile experiment processed the original rules through the
-complete pipeline, assigning GLM-5.2 to normalization, judging, and extraction.
-The scan-only and Qwen3.5:9b experiments instead consumed the stored
-GPT-4.1-normalized corpus.
-
-### End-to-End Synthesis
-
-Full-compile results include the compiler toolchains and runnable-backend
-constraints:
-
-| Collection | Rules | GPT-4.1 full compile | GLM-5.2 full compile |
-|---|---:|---:|---:|
-| antidebug_antivm | 1 | 1 (100%) | 1 (100%) |
-| crypto | 1 | 1 (100%) | 1 (100%) |
-| cve_rules | 14 | 10 (71%) | 12 (86%) |
-| email | 11 | 11 (100%) | 9 (82%) |
-| exploit_kits | 11 | 11 (100%) | 11 (100%) |
-| malware | 363 | 285 (79%) | 307 (85%) |
-| packers | 6 | 3 (50%) | 4 (67%) |
-| webshells | 9 | 8 (89%) | 8 (89%) |
-| **Total** | **416** | **330 (79.3%)** | **353 (84.9%)** |
-
-GLM-5.2 produced 23 more matching artifacts than GPT-4.1 in full-compile mode,
-an improvement of 5.5 percentage points over the corpus. Most of the net gain
-came from malware rules (307 versus 285), while GPT-4.1 performed better on the
-email collection (11 versus 9). The runs reported durations of 5638.418 seconds
-for GPT-4.1 and 5114.080 seconds for GLM-5.2, each with one worker. Because they
-used different providers and were run at different times, these durations are
-operational observations rather than a controlled latency benchmark.
-
-Scan-only results use compiler-free scanner artifacts and are therefore shown
-separately:
-
-| Collection | Rules | GPT-4.1 scan-only | phi4:14b scan-only |
-|---|---:|---:|---:|
-| antidebug_antivm | 1 | 1 (100%) | 0 (0%) |
-| crypto | 1 | 1 (100%) | 1 (100%) |
-| cve_rules | 14 | 12 (86%) | 12 (86%) |
-| email | 11 | 11 (100%) | 10 (91%) |
-| exploit_kits | 11 | 11 (100%) | 6 (55%) |
-| malware | 363 | 296 (82%) | 258 (71%) |
-| packers | 6 | 3 (50%) | 1 (17%) |
-| webshells | 9 | 9 (100%) | 6 (67%) |
-| **Total** | **416** | **344 (82.7%)** | **294 (70.7%)** |
-
-GPT-4.1 scan-only used structured output and streaming through an
-OpenAI-compatible gateway. Its artifact distribution was 198 ELF, 123 PE, and
-23 generic files. The phi4:14b run used Ollama on an RTX 3060 with 12 GB VRAM,
-made no cloud API calls, and reported a duration of 4220.128 seconds with one
-worker.
-
-Of the 63 GLM-5.2 full-pipeline failures, 46 were post-synthesis YARA
-mismatches, 11 were compiler failures, and 6 were other model, parsing, or
-construction errors. Success means that the generated artifact produced an
-actual match when scanned by the YARA CLI. A valid model response or successful
-build alone does not count.
-
-### Fully Local Qwen3.5:9b Experiment
-
-[`qwen3.5:9b`](https://ollama.com/library/qwen3.5) was evaluated as a smaller
-model running entirely through a local Ollama endpoint. It consumed the stored
-normalized corpus and used the full-compile backends. Qwen3.5:9b was configured
-for normalization, judging, string extraction, and constant extraction; all
-model endpoints resolved to `http://localhost:11434/v1`. The run used one
-worker and structured output on the same AMD Ryzen 9 7900X, 64 GB RAM, and
-NVIDIA RTX 3060 12 GB environment as the phi4:14b experiment.
-
-| Collection | Rules | Qwen3.5:9b full compile |
-|---|---:|---:|
-| antidebug_antivm | 1 | 0 (0%) |
-| crypto | 1 | 1 (100%) |
-| cve_rules | 14 | 8 (57%) |
-| email | 11 | 4 (36%) |
-| exploit_kits | 11 | 3 (27%) |
-| malware | 363 | 118 (33%) |
-| packers | 6 | 1 (17%) |
-| webshells | 9 | 2 (22%) |
-| **Total** | **416** | **137 (32.9%)** |
-
-The run completed in 22512.680 seconds (approximately 6.25 hours). Each of the
-137 successes represents an artifact that was synthesized locally and then
-independently accepted by the YARA CLI. The result is reported separately from
-phi4:14b because Qwen used full compilation while phi4 used scan-only artifacts.
-
-| Failure category | Count | Share of 279 failures |
-|---|---:|---:|
-| Empty LLM response | 124 | 44.4% |
-| YARA mismatch after synthesis | 114 | 40.9% |
-| Malformed hex extraction | 11 | 3.9% |
-| Schema validation failure | 9 | 3.2% |
-| Non-JSON LLM response | 8 | 2.9% |
-| Compiler failure | 6 | 2.2% |
-| Other model or construction error | 6 | 2.2% |
-| Integer conversion error | 1 | 0.4% |
-| **Total** | **279** | **100.0%** |
-
-The two dominant categories expose distinct improvement targets. Empty
-responses call for bounded retries and more robust local structured-output
-handling. YARA mismatches require semantic checks after extraction and a
-feedback loop that retries synthesis using scanner results. Malformed hex and
-schema failures can be detected deterministically before construction.
-
-Future local-model work will evaluate Qwen in scan-only mode for a controlled
-comparison with phi4:14b, add retries for empty or invalid responses, validate
-extracted hex and constants before code generation, and use failed YARA scans
-to guide targeted extraction or synthesis retries.
+YARA `pe.*` conditions remain outside Aray's construction scope. Current code
+classifies them as `unsupported` during capability preflight; they do not act as
+PE routing evidence and do not reach extraction or construction.
 
 ## Evaluation
 
@@ -225,6 +95,32 @@ uv run aray-eval \
   --output eval_report.json
 ```
 
+Rerun only failed cases from an earlier report:
+
+```bash
+REPORT=evaluation/reports/<run>/eval_report.json
+
+uv run aray-eval \
+  $(uv run python -c '
+import json, sys
+for result in json.load(open(sys.argv[1]))["results"]:
+    if result["status"] == "failed":
+        print(result["rule_path"])
+' "$REPORT") \
+  --model glm-5.2:cloud \
+  --base-url http://localhost:11434/v1 \
+  --workers 1 \
+  --output evaluation/reports/failed-retest/eval_report.json
+```
+
+Positional paths replace the configured `.evaluator` input directories. The
+targeted report contains only the selected failures; it is not automatically
+merged with the earlier full-corpus report.
+
+The two official schema 2.1 reports contain every failed record, so this command
+can select all 12 cases from either report. A targeted rerun remains a separate
+experiment and does not replace the published full-corpus baseline.
+
 Useful options:
 
 | Option | Purpose |
@@ -241,6 +137,36 @@ Without `--output`, reports are written to `evaluation/reports/<timestamp>/eval_
 The CLI prints the report's absolute path after writing it. When
 `--keep-artifacts` is enabled, it also prints the absolute temporary directory
 preserved for each evaluated rule.
+
+Evaluation reports use the additive diagnostic schema
+`aray.diagnostic-evaluation` version `2.1`. Existing result fields remain
+available, with environment/tool metadata, structured failure fingerprints,
+pipeline node timings and final state, compiler and YARA diagnostics, bounded
+tracebacks, and SHA-256 manifests added for troubleshooting. Text is truncated
+and credential-shaped fields and values are redacted; API keys are never
+written. Report-level summaries include deterministic failure clusters and
+disposition counts. Schema 2.1 also records corpus, source, selected-rule, and
+normalized-rule hashes plus Git and toolchain provenance, and refuses to write a
+report if the serialized result count differs from `metadata.total`.
+
+`status` remains the coarse execution outcome: `passed`, `failed`, or `skipped`.
+`disposition` explains the semantic outcome, including `matched`, `unsupported`,
+`infeasible`, `unsatisfiable`, `normalization_failed`, `construction_failed`,
+and `unexplained_mismatch`. A preflight disposition still has `status="failed"`
+because no matching artifact was produced.
+
+Each result also includes `artifact_analysis`, which records:
+
+- artifact size, SHA-256, initial header bytes, and filesize satisfaction;
+- every extracted string identifier, format, expected bytes, required and
+  observed match counts, expected offset, and first observed offsets;
+- expected and observed constant bytes, width, byte order, and offset status;
+- unsupported `hash.*`, `pe.*`, and `math.*` references detected in the rule.
+
+Compiler invocations retain sanitized argv, return code, duration, stdout, and
+stderr. Pipeline exceptions retain a bounded traceback and the last known state,
+even when no final LangGraph state is returned. Binary contents are not embedded
+in the report.
 
 Calling `aray-eval` without arguments prints the standard help and exits with
 status `0`. To process paths from `.evaluator` without positional inputs, pass
@@ -281,6 +207,10 @@ Index files named `index.yar`, `*_index.yar`, or `index_*.yar`, and files beginn
 
 ```json
 {
+  "schema": {
+    "name": "aray.diagnostic-evaluation",
+    "version": "2.1"
+  },
   "metadata": {
     "timestamp": "2026-03-08T14:22:01",
     "total": 42,
@@ -288,29 +218,61 @@ Index files named `index.yar`, `*_index.yar`, or `index_*.yar`, and files beginn
     "failed": 5,
     "skipped": 2,
     "duration_seconds": 183.4,
+    "corpus_sha256": "...",
     "config": {
       "model": "gpt-4.1",
       "workers": 4,
       "scan_only": true
     }
   },
+  "summary": {
+    "status_counts": {"passed": 35, "failed": 5, "skipped": 2},
+    "disposition_counts": {"matched": 35, "unsupported": 3, "infeasible": 2, "skipped": 2},
+    "failure_categories": {"infeasible_constraint": 2, "unsupported_capability": 3}
+  },
+  "failure_clusters": [],
   "results": [
     {
       "rule_path": "evaluation/rules/cve_rules/CVE-2010-0805.yar",
       "rule_name": "MSIETabularActivex",
       "status": "passed",
+      "disposition": "matched",
       "error": null,
       "yara_stdout": "MSIETabularActivex /tmp/.../linux/app\n",
       "yara_returncode": 0,
       "normalize_model": "gpt-4.1",
       "extract_model": "gpt-4.1-mini",
-      "normalize_verdict": "passed"
+      "normalize_verdict": "passed",
+      "source_sha256": "...",
+      "selected_rule_sha256": "...",
+      "normalized_rule_sha256": "...",
+      "failure": null,
+      "pipeline": {
+        "node_sequence": ["read_yara", "assess_constructibility", "extract_strings", "compile"],
+        "nodes": [],
+        "final_state": {}
+      },
+      "compiler_subprocesses": [],
+      "yara_stderr": "",
+      "artifacts": [
+        {"path": "linux/app", "size": 1016, "sha256": "..."}
+      ],
+      "generated_files": [],
+      "artifact_analysis": {
+        "size_bytes": 1016,
+        "strings": [],
+        "constants": []
+      }
     }
   ]
 }
 ```
 
-Each result distinguishes pipeline errors, normalization failures, build failures, YARA errors, and successful or unsuccessful scans.
+Each result distinguishes pipeline errors, normalization failures, preflight
+classifications, build failures, YARA errors, and successful or unsuccessful
+scans. Failure fingerprints are deterministic operational groupings;
+byte-level `artifact_analysis` provides the finer evidence needed to separate
+otherwise identical YARA no-match results.
 
 ## Normalization Evaluator
 
@@ -405,11 +367,14 @@ uv run pytest -m "not llm" tests/ -v
 
 Coverage includes:
 
-- ASCII, hex, wildcard, jump, and wide encodings;
-- exact, multiple, and invalid offset layouts;
+- ASCII, UTF-8, hex, wildcard, jump, wide, `ascii wide`, `fullword`, and `nocase` encodings;
+- exact, multiple, ranged, early-window, and invalid offset layouts;
+- simple match-count multiplicity and negated-string exclusion;
 - linker script generation and ELF placement;
 - PE routing, two-pass placement, and byte verification;
-- little-endian constant patching;
+- `int16`, little- and big-endian constant patching, and integer-width validation;
+- narrow PE32 computed-header checks with the i686 MinGW backend;
+- capability preflight for unsupported, infeasible, and unsatisfiable rules;
 - generic magic detection and extensions;
 - filesize parsing and padding calculations;
 - normalization retries and terminal failure;
@@ -428,11 +393,13 @@ They require `OPENAI_API_KEY` and are skipped automatically when it is absent. E
 
 ## Interpreting Results
 
-The published success rates combine both sides of the system:
+The official success rates use a frozen, already-normalized corpus. They combine
+provider and extraction-call compatibility, authoritative deterministic
+fixed-evidence extraction, deterministic format routing and construction,
+full-compile toolchain behavior, and final acceptance by YARA. They do not
+measure or compare normalization quality.
 
-- nondeterministic normalization and extraction quality;
-- deterministic format routing and construction capability;
-- compatibility with the external compiler when full-compile mode is used;
-- final acceptance by YARA.
-
-They should not be read as full YARA-language coverage or as a guarantee that every artifact is executable. Scan-only results specifically measure scanner artifacts, while full-compile results include runnable backend constraints and toolchain behavior.
+The results should not be read as full YARA-language coverage or as a guarantee
+that every artifact is executable. In particular, `pe.*` remains outside scope.
+Future capability or environment changes require a new full-corpus evaluation
+before any updated rate can be published.

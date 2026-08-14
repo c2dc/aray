@@ -41,17 +41,17 @@ Real-world rules evaluated
 
 <div class="aray-metric" markdown>
 
-<strong>84.9%</strong>
+<strong>97.1%</strong>
 
-Best full-compile match rate
+Official full-compile match rate
 
 </div>
 
 <div class="aray-metric" markdown>
 
-<strong>82.7%</strong>
+<strong>404</strong>
 
-GPT-4.1 scan-only match rate
+YARA matches in each official run
 
 </div>
 
@@ -88,7 +88,7 @@ Use the artifacts to exercise:
 
 ### The model interprets
 
-Complex rules may be normalized and judged by an LLM. Deterministic canonicalization restores retained fixed values and derives linear hex witnesses before judging. Strings, formats, offsets, and integer checks are extracted into Pydantic models.
+Complex rules may be normalized and judged by an LLM. Deterministic canonicalization restores retained fixed values and derives linear hex witnesses before judging. Supported fixed strings, modifiers, placements, counts, and endian-aware integer checks are then extracted lexically into Pydantic models; model extraction cannot override these deterministic results.
 
 </div>
 
@@ -110,7 +110,12 @@ The batch evaluator invokes the real YARA CLI. A valid model response or a succe
 
 </div>
 
-![Aray pipeline showing the model-assisted interpretation boundary and deterministic construction stages](diagrams/aray-pipeline-determinism-flow.svg)
+```text
+read + select rule -> optional LLM normalize/judge
+                  -> deterministic fixed-evidence extraction
+                  -> PE / ELF / generic construction
+                  -> YARA verification
+```
 
 [Read the architecture details](architecture.md){ .md-button }
 
@@ -138,7 +143,7 @@ Requirements are Linux, Python 3.12+, [`uv`](https://docs.astral.sh/uv/), the YA
 | Target | Construction strategy | Output |
 |---|---|---|
 | Linux ELF | GNU assembler sections and a linker script, or a direct minimal ELF64 writer | `build/linux/app` |
-| Windows PE | MinGW with offset-aware two-pass placement, or a direct minimal PE64 writer | `build/windows/app.exe` |
+| Windows PE | MinGW with offset-aware two-pass placement, or a direct minimal PE32/PE32+ writer | `build/windows/app.exe` |
 | Generic | Direct byte-blob writer preserving format magic at offset zero | `build/generic/output{ext}` |
 
 Generated sources and normalized rules remain available in the build directory for inspection. The model never emits C, assembly, linker scripts, PE headers, or complete binary data.
@@ -147,19 +152,16 @@ Generated sources and normalized rules remain available in the build directory f
 
 Aray was evaluated against 416 public rules from the Yara-Rules community repository. End-to-end success means the generated artifact produced an actual match when scanned by the YARA CLI.
 
-The latest full normalization-only run with GLM-5.2 Cloud accepted **415/416 rules (99.8%)**. Its remaining fixed-literal transcription failure passed a later isolated retest after canonicalization was generalized; a new `416/416` full-corpus run is not claimed.
+The only official published results are two full-compile reports:
 
-On a separate targeted GPT-4.1 retest through the official OpenAI endpoint, the current pipeline recovered **17/21 previously non-passed cases (81.0%)**. Four complex regex witnesses remained invalid. This targeted recovery is reported separately from full-corpus metrics.
-
-| Model | Build mode | Matches | Success rate |
+| Provider/model configuration | Report | Matches | Success rate |
 |---|---|---:|---:|
-| GLM-5.2 Cloud | Full compile | 353 / 416 | **84.9%** |
-| GPT-4.1 | Scan only | 344 / 416 | **82.7%** |
-| GPT-4.1 | Full compile | 330 / 416 | **79.3%** |
-| phi4:14b via local Ollama | Scan only | 294 / 416 | **70.7%** |
-| Qwen3.5:9b via local Ollama | Full compile | 137 / 416 | **32.9%** |
+| GPT-4.1 | `2026-08-14T09-32-09-gpt-4.1` | 404 / 416 | **97.1%** |
+| GLM-5.2 Cloud (`glm-5.2:cloud`) | `2026-08-14T13-07-22-eval-glm-5.2` | 404 / 416 | **97.1%** |
 
-Build modes and provider conditions differ, so results are reported separately rather than treated as a controlled model leaderboard.
+Both runs used the same frozen `evaluation/normalized-glm-5.2-stable` corpus, and no rule entered the normalization-and-judge loop. They measure provider, pipeline, authoritative deterministic extraction, toolchain, backend, and YARA compatibility; they do not compare normalization quality.
+
+Both schema 2.1 reports retain all 416 per-rule results. Each records the same 12 non-matches: ten deterministic preflight dispositions and two construction failures caused by a missing i686 MinGW compiler in the evaluation environment. The 97.1% rate is not adjusted for those environmental failures. Full-corpus evaluations with smaller models such as Phi and Qwen are planned but not yet published.
 
 [Review the methodology and collection breakdown](evaluation.md){ .md-button }
 

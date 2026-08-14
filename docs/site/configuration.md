@@ -14,7 +14,8 @@ Aray runs on Linux and requires Python 3.12 or newer.
 | OpenAI-compatible model | rule normalization and extraction |
 | `yara` CLI | manual verification and `aray-eval` |
 | GCC and GNU Binutils | runnable Linux ELF output |
-| MinGW `x86_64-w64-mingw32-gcc` | runnable Windows PE output |
+| MinGW `x86_64-w64-mingw32-gcc` | runnable PE32+ output |
+| MinGW `i686-w64-mingw32-gcc` | runnable PE32 output for supported computed-header checks |
 | Ollama | optional fully local model execution |
 | Wine | optional PE execution tests |
 
@@ -27,7 +28,7 @@ sudo apt update
 sudo apt install -y yara
 
 # Optional runnable backends
-sudo apt install -y gcc binutils gcc-mingw-w64-x86-64
+sudo apt install -y gcc binutils gcc-mingw-w64-x86-64 gcc-mingw-w64-i686
 ```
 
 Install Python dependencies:
@@ -57,7 +58,7 @@ Then run:
 uv run aray data/rules/rule0.yar --scan-only
 ```
 
-GPT-4.1 is the compatibility default and the model used for the published synthesis evaluation and normalization baseline. It is not a requirement; any compatible model can be selected.
+GPT-4.1 is the compatibility default and one of the two configurations used for the official synthesis reports. It is not a requirement; any compatible model can be selected.
 
 ## Local Ollama
 
@@ -75,43 +76,10 @@ When `base_url` is set without an API key, Aray supplies `not-needed` so the Ope
 
 Models known to need `--no-stream` through Ollama include `phi4:14b` and `qwen3.5:4b`. Structured output is still attempted and automatically falls back to prompt-based JSON when tool calls are unsupported.
 
-### Qwen3.5:9b
-
-The published smaller-model experiment used the official
-[`qwen3.5:9b`](https://ollama.com/library/qwen3.5) model entirely locally:
-
-```bash
-ollama pull qwen3.5:9b
-
-uv run aray data/rules/rule0.yar \
-  --model qwen3.5:9b \
-  --base-url http://localhost:11434/v1
-```
-
-The corpus run used the stored normalized rule directories, full compilation,
-one worker, and the local Ollama endpoint for every model role:
-
-```toml
-[evaluator]
-model = "qwen3.5:9b"
-normalize_model = "qwen3.5:9b"
-extract_model = "qwen3.5:9b"
-base_url = "http://localhost:11434/v1"
-normalize_base_url = "http://localhost:11434/v1"
-extract_base_url = "http://localhost:11434/v1"
-workers = 1
-scan_only = false
-```
-
-On an AMD Ryzen 9 7900X with 64 GB RAM and an NVIDIA RTX 3060 12 GB,
-Qwen3.5:9b synthesized artifacts that matched 137 of 416 rules (32.9%). This is
-a fully local full-compile baseline; it is not directly comparable to the
-phi4:14b result obtained in scan-only mode.
-
 ## Ollama Cloud
 
 Ollama also exposes cloud-hosted models through its locally running client. The
-normalization experiment used
+configuration example uses
 [`glm-5.2:cloud`](https://ollama.com/library/glm-5.2): Aray sent requests to the
 local Ollama OpenAI-compatible endpoint, while Ollama routed inference to its
 cloud infrastructure.
@@ -136,9 +104,9 @@ judge_model = "glm-5.2:cloud"
 base_url = "http://localhost:11434/v1"
 ```
 
-The same provider setup was also used for the published complete-pipeline
-evaluation. In that run, `glm-5.2:cloud` handled normalization, judging, and
-extraction, and Aray used the full-compile backends:
+The same provider setup was used for one official complete-pipeline report. In
+that run, `glm-5.2:cloud` was configured for all model roles and Aray used the
+full-compile backends:
 
 ```toml
 [evaluator]
@@ -152,14 +120,17 @@ workers = 1
 scan_only = false
 ```
 
-That configuration matched 353 of 416 rules (84.9%).
+That official report records 404/416 matches (97.1%) against the frozen
+`evaluation/normalized-glm-5.2-stable` corpus. Because those inputs were already
+normalized, this measures provider/pipeline/backend compatibility rather than
+normalization quality.
 
 The endpoint is local, but the model is not: rule content is sent to Ollama
 Cloud for inference. The `not-needed` placeholder supplied by Aray only
 satisfies the OpenAI client library when connecting to the local gateway;
-Ollama manages access to its cloud service separately. GPT-4.1 inference in the
-comparison was also cloud-hosted, so neither the normalization nor the
-full-compile comparison measures local inference against cloud inference.
+Ollama manages access to its cloud service separately. The other official run
+used cloud-hosted GPT-4.1 against the same frozen corpus; the equal result is not
+a normalization-quality or local-versus-cloud comparison.
 
 ## Other Gateways
 
@@ -269,7 +240,7 @@ uv run aray rule.yar --scan-only
 ```
 
 - Linux rules produce `build/linux/app`, a minimal ELF64 scanner artifact.
-- PE rules produce `build/windows/app.exe`, a minimal PE64 scanner artifact.
+- PE rules produce `build/windows/app.exe`, a minimal PE32 or PE32+ scanner artifact selected from supported constraints.
 - Generic rules always produce `build/generic/output{ext}` without a compiler.
 
 Scan-only ELF and PE files are intended for YARA scanning and are not guaranteed to execute.
@@ -281,7 +252,7 @@ uv run aray rule.yar
 ```
 
 - Linux uses `gcc -static -nostdlib -no-pie` and a generated linker script.
-- PE uses `x86_64-w64-mingw32-gcc`.
+- PE32+ uses `x86_64-w64-mingw32-gcc`; supported narrow PE32 computed-header checks use `i686-w64-mingw32-gcc`.
 - Generic formats remain compiler-free blobs.
 
 ## Debugging
@@ -300,7 +271,7 @@ Common failures:
 | malformed or unsupported tool calls | use a compatible model; JSON fallback is automatic |
 | streaming errors | add `--no-stream` or a role-specific no-stream flag |
 | `gcc` not found | install GCC or use `--scan-only` |
-| MinGW executable not found | install `gcc-mingw-w64-x86-64` or use `--scan-only` |
+| MinGW executable not found | install `gcc-mingw-w64-x86-64` and `gcc-mingw-w64-i686`, or use `--scan-only` |
 | `yara` not found | install the YARA CLI before verification or batch evaluation |
 
 ## Configuration Files

@@ -8,21 +8,31 @@ All notable changes to this project will be documented in this file.
 
 - **Standalone YARA source selection** (`aray/yara_source.py`): lexically selects the first non-private rule, inlines reachable same-file and sibling dependencies, preserves imports and global constraints, resolves rule sets, and assigns stable names to anonymous strings before any model call.
 - **Deterministic normalization validation** (`aray/yara_validation.py`): checks syntax, modifiers, retained values, count expansions, regex witnesses, and hex witnesses; supported complete count expansions can bypass the LLM judge when fully proven.
+- **Deterministic evidence extraction** (`aray/yara_extraction.py`): derives fixed string bytes, identifiers, modifiers, positive/negative references, exact and ranged placements, simple match counts, and endian-aware integer checks from normalized YARA source.
+- **Capability preflight** (`aray/capabilities.py`, `aray/nodes.py`, `aray/graph.py`): classifies `pe.*` conditions as `unsupported`, prescribed whole-file hash preimages as `infeasible`, and out-of-range integer equalities as `unsatisfiable` before extraction, routing, or construction.
+- **Signed and PE32 integer support** (`aray/yara_extraction.py`, `aray/compiler.py`, `aray/artifact_writer.py`): adds deterministic `int16` handling and narrow `uint16(uint32(0x3c)+delta)` PE32 checks with `i686-w64-mingw32-gcc` selection.
+- **Diagnostic evaluation schema 2.1** (`aray/diagnostics.py`, `aray/evaluator.py`): records environment and tool versions, Git/tool/corpus provenance, source and normalized hashes, semantic dispositions, node state and timings, compiler and YARA output, bounded tracebacks, artifact manifests and hashes, byte-level witness analysis, structured failures, and deterministic report clusters without storing API keys.
 
 ### Changed
 
 - **Batch normalization reliability** (`aray/normalizer.py`): retries failed verdicts and transient invocation errors up to three times, writes only accepted candidates, and removes stale output after terminal failures or errors.
 - **Ruleset evaluation** (`aray/evaluator.py`, `aray/nodes.py`): synthesizes and scans the selected standalone rule and its dependency closure rather than allowing unrelated rules from the source file to affect evaluation.
+- **Compact and modifier-aware construction** (`aray/codegen.py`, `aray/compiler.py`): emits byte-exact UTF-8/UTF-16LE witnesses, respects `ascii wide`, `fullword`, `nocase`, match counts and ranges, packs runnable ELF files, and selects the low-alignment PE backend for tight filesize constraints.
+- **Format routing and constants** (`aray/nodes.py`, `aray/compiler.py`, `aray/artifact_writer.py`): no longer treats `wide` as PE evidence, recognizes native PE/ELF magic, routes incompatible low offsets to generic output, and writes `uint16be`/`uint32be` values using their declared byte order.
+- **PE routing boundary** (`aray/capabilities.py`, `aray/nodes.py`): YARA module `pe.*` references no longer act as format evidence; only native byte-level structural checks can select the PE backend.
+- **CI MinGW coverage** (`.github/workflows/ci.yml`): installs `gcc-mingw-w64-i686` alongside the x86-64 toolchain for PE32 integration coverage.
 
 ### Fixed
 
 - **Deterministic retained-value canonicalization** (`aray/yara_validation.py`): retained fixed literals and fixed hex sequences are restored directly from the original rule, while linear hex wildcards and jumps are converted to canonical witnesses without model-side character or byte counting. Regex and complex-hex witnesses continue through `yara-python` validation.
 - **Normalization regressions** (`tests/test_yara_validation.py`): covers long repeated literals, escaped values, model-induced type changes, fixed hex changes, exact and ranged jumps, partial wildcards, and complex patterns that must not be guessed.
+- **Complete result retention** (`aray/evaluator.py`): schema 2.1 verifies that serialization preserves every result and writes reports atomically, preventing future report arrays from being silently truncated.
 
 ### Documentation
 
-- **Latest GLM-5.2 normalization results** (`README.md`, `docs/site/`): records the fourth 416-rule run at 415 accepted rules (99.8%), the successful isolated retests for `Ponmocup` and `CVE-2012-0158`, and explicitly avoids claiming a later full-corpus `416/416` result.
-- **Targeted GPT-4.1 retest** (`README.md`, `docs/site/`): documents recovery of 17/21 previously non-passed cases through the official OpenAI endpoint, the four remaining regex-witness failures, and the distinction between projected recovery and a complete corpus run.
+- **Official evaluation baseline** (`README.md`, `docs/site/`): publishes only the August 14 full-corpus GPT-4.1 and GLM-5.2 Cloud reports over `evaluation/normalized-glm-5.2-stable`, both at 404/416 matches (97.1%), and explains that the frozen inputs make these provider/pipeline/backend compatibility runs rather than normalization-quality comparisons.
+- **Complete evaluation auditability** (`README.md`, `docs/site/evaluation.md`): records that both schema 2.1 reports contain all 416 per-rule results, the same 12 failure dispositions, and two observed construction failures caused by the evaluation environment lacking `i686-w64-mingw32-gcc`.
+- **Public result cleanup** (`README.md`, `docs/site/`): removes superseded experiment tables, targeted projections, and prior GPT-4.1/GLM-5.2 figures. Phi and Qwen remain configuration examples until their planned full-corpus evaluations are available.
 
 ## [0.9.0] - 2026-08-05
 
