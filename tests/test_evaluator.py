@@ -2,6 +2,7 @@
 
 from __future__ import annotations
 
+import json
 import subprocess
 from pathlib import Path
 from unittest.mock import MagicMock, patch
@@ -12,6 +13,7 @@ from aray.evaluator import (
     EvalConfig,
     EvalResult,
     _build_eval_config,
+    _execution_provenance,
     _extract_first_rule_name,
     _extract_first_rule_text,
     _find_yar_files,
@@ -603,6 +605,10 @@ class TestEvalResultToDict:
         assert d["yara_returncode"] == 0
         assert d["normalize_model"] == "gpt-4.1"
         assert d["extract_model"] == "gpt-4.1-mini"
+        assert d["normalization_source"] == "not_reached"
+        assert d["strings_extraction_source"] == "not_reached"
+        assert d["constants_extraction_source"] == "not_reached"
+        assert d["llm_used"] is False
 
     def test_failed_result_dict(self):
         r = EvalResult(
@@ -706,6 +712,9 @@ class TestBuildEvalConfig:
             extract_base_url=None,
             normalize_api_key=None,
             extract_api_key=None,
+            reasoning_effort=None,
+            normalize_reasoning_effort=None,
+            extract_reasoning_effort=None,
             normalize_no_stream=False,
             extract_no_stream=False,
             scan_only=False,
@@ -812,6 +821,35 @@ class TestBuildEvalConfig:
         cfg = _build_eval_config(args, {})
         assert cfg.scan_only is True
 
+    def test_reasoning_effort_role_precedence(self, monkeypatch):
+        monkeypatch.setenv("EXTRACT_REASONING_EFFORT", "low")
+        args = self._make_args(reasoning_effort="medium")
+        file_cfg = {
+            "evaluator": {
+                "normalize_reasoning_effort": "high",
+                "extract_reasoning_effort": "none",
+            }
+        }
+
+        cfg = _build_eval_config(args, file_cfg)
+
+        assert cfg.normalize_reasoning_effort == "medium"
+        assert cfg.extract_reasoning_effort == "medium"
+
+    def test_role_reasoning_effort_overrides_shared_toml(self):
+        args = self._make_args()
+        file_cfg = {
+            "evaluator": {
+                "reasoning_effort": "medium",
+                "extract_reasoning_effort": "none",
+            }
+        }
+
+        cfg = _build_eval_config(args, file_cfg)
+
+        assert cfg.normalize_reasoning_effort == "medium"
+        assert cfg.extract_reasoning_effort == "none"
+
 
 # ---------------------------------------------------------------------------
 # _write_report path logic
@@ -846,6 +884,32 @@ class TestWriteReportPath:
         _write_report([self._make_result()], cfg, "2026-03-08T00-00-00")
         assert (tmp_path / "my.json").exists()
         assert not (tmp_path / "evaluation").exists()
+
+    def test_report_aggregates_processing_paths(self, tmp_path):
+        out = tmp_path / "report.json"
+        cfg = EvalConfig(directories=[], output=str(out))
+        deterministic = self._make_result()
+        deterministic.normalization_source = "not_needed"
+        deterministic.strings_extraction_source = "deterministic"
+        deterministic.constants_extraction_source = "deterministic"
+        fallback = self._make_result()
+        fallback.normalization_source = "llm"
+        fallback.strings_extraction_source = "llm_fallback"
+        fallback.constants_extraction_source = "deterministic"
+        fallback.llm_used = True
+
+        _write_report([deterministic, fallback], cfg, "unused")
+
+        report = json.loads(out.read_text())
+        assert report["summary"]["processing_paths"] == {
+            "normalization": {"not_needed": 1, "llm": 1},
+            "strings_extraction": {"deterministic": 1, "llm_fallback": 1},
+            "constants_extraction": {"deterministic": 2},
+        }
+        assert report["summary"]["llm_usage"] == {
+            "rules_using_llm": 1,
+            "rules_without_llm": 1,
+        }
 
 
 class TestParseArgs:
@@ -901,6 +965,32 @@ class TestEvalResultNormalizeFields:
         d = r.to_dict()
         assert d["normalize_verdict"] is None
         assert d["normalize_reason"] is None
+
+
+class TestExecutionProvenance:
+    def test_pre_normalized_deterministic_path(self):
+        result = _execution_provenance(
+            {
+                "needs_normalization": False,
+                "strings_extraction_source": "deterministic",
+                "constants_extraction_source": "deterministic",
+            }
+        )
+
+        assert result == {
+            "normalization_source": "not_needed",
+            "strings_extraction_source": "deterministic",
+            "constants_extraction_source": "deterministic",
+            "llm_used": False,
+        }
+
+    def test_preflight_path_did_not_reach_extraction(self):
+        result = _execution_provenance({"needs_normalization": False})
+
+        assert result["normalization_source"] == "not_needed"
+        assert result["strings_extraction_source"] == "not_reached"
+        assert result["constants_extraction_source"] == "not_reached"
+        assert result["llm_used"] is False
 
 
 # ---------------------------------------------------------------------------

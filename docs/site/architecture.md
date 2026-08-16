@@ -1,6 +1,6 @@
 # Architecture
 
-Aray is an LLM-assisted rule interpreter connected to deterministic binary-construction backends. This distinction is the central design constraint: model calls reduce a YARA rule to typed data, while conventional code owns byte encoding, layout, compilation, patching, and artifact writing.
+Aray is a deterministic-first rule interpreter connected to binary-construction backends, with LLM assistance for normalization and unsupported extraction syntax. Conventional code owns constructibility checks, typed extraction for the supported subset, byte encoding, layout, compilation, patching, and artifact writing.
 
 <p align="center" markdown>
 ![Aray architecture showing configuration, role-specific LLMs, LangGraph orchestration, artifact backends, and external dependencies](diagrams/aray-architecture.svg){ width="900" }
@@ -19,7 +19,11 @@ deterministic read + normalization check
    +-- complex rule -> normalize -> judge --------+  LLM-assisted
                                                    |
                                                    v
-                                  extract strings + constants  LLM-assisted
+                                   constructibility preflight  deterministic
+                                                   |
+                                                   v
+                                  extract strings + constants  deterministic first,
+                                                               LLM fallback
                                                    |
                                                    v
                                 typed Pydantic representation
@@ -59,7 +63,7 @@ LangGraph provides orchestration, state transitions, and bounded retries. It doe
 - `or` conditions;
 - numeric count expressions such as `5 of ($a*)`.
 
-Otherwise the original text becomes `normalized_rule` unchanged. This skips normalization and judging, but extraction still uses a model.
+Otherwise the original text becomes `normalized_rule` unchanged. This skips normalization and judging; supported extraction also proceeds without a model.
 
 ### Normalize and Judge
 
@@ -88,27 +92,57 @@ This division keeps branch selection probabilistic while removing character coun
 
 The batch normalizer retries failed verdicts and transient invocation errors up to three times. It writes output only after a passed verdict and removes stale output after failures or errors.
 
+### Assess Constructibility
+
+`assess_constructibility` runs after normalization/judging and before extraction.
+It deterministically stops rules that require unsupported YARA `pe.*` or
+`math.*` module semantics, infeasible prescribed whole-file cryptographic hash
+preimages, unsatisfiable integer values, or a PE32 compiler that is not installed.
+These terminal classifications reach `fail_construction` without invoking the
+extraction fallback or an artifact backend.
+
 ### Extract Typed Data
 
-`extract_strings` returns entries containing a value, format, and optional file offset. `extract_constants` returns integer comparisons containing a value, offset, width, and nested-expression flag. These responses are validated by Pydantic models.
+`extract_strings` and `extract_constants` first parse the normalized rule with
+`aray/yara_extraction.py`. The deterministic subset handles:
 
-Structured output is attempted first. If a model or gateway cannot use tool calls, `aray.llm._invoke_llm` injects the JSON schema into the prompt, parses the response, and validates the same Pydantic model.
+- condition-aware required and negated strings, `all`/`any` sets, and simple match counts;
+- exact and ranged placements;
+- ASCII/UTF-8 literals, fixed hex, `wide`, `ascii wide`, `fullword`, and `nocase` fields;
+- `int16`, `uint16`, `uint32`, `uint16be`, and `uint32be` reads;
+- nested PE-relative reads such as `uint16(uint32(0x3c)+0x18)`;
+- `==`, `!=`, `<`, `<=`, `>`, and `>=` integer comparisons by selecting one concrete satisfying witness.
 
-This constrains response shape, not meaning. A model can still omit a pattern or assign a wrong offset.
+The resulting entries include values, formats, placement/count fields,
+modifiers, integer width and byte order, and nested relative offsets. Pydantic
+models validate this typed representation.
+
+Only syntax outside that deterministic subset falls back to extraction model
+calls. Structured output is attempted first; if a model or gateway cannot use
+tool calls, `aray.llm._invoke_llm` injects the JSON schema into the prompt,
+parses the response, and validates the same Pydantic model.
+
+Schema validation constrains fallback response shape, not meaning. A fallback
+model can still omit a pattern or assign a wrong offset; it cannot override a
+successful deterministic extraction.
 
 ### Route the Artifact
 
-`route_file_type` is pure computation. It chooses:
+`route_file_type` is pure computation. It generally chooses:
 
-- `pe` for MZ/PE structural checks or wide strings;
-- `generic` for non-PE magic anchored at offset zero;
+- `pe` for MZ/PE structural checks and ordinary wide-string rules;
+- `generic` for fixed non-PE magic anchored at offset zero and low exact/ranged placements that require a flat scanner blob;
 - `elf` for everything else.
 
-Critical offset-zero claims are cross-checked against the YARA text before they influence routing. This prevents a hallucinated extraction offset from turning an ELF rule into a generic blob.
+Fixed non-PE headers and low ranged witnesses take precedence over PE hints,
+including MZ-like evidence or a wide string, when generic construction is the
+feasible placement path. Critical offset-zero claims are cross-checked against
+the YARA text before they influence routing. This prevents a hallucinated
+extraction offset from turning an ELF rule into a generic blob.
 
 ## Internal Representation
 
-The model-facing boundary uses the Pydantic types in `aray/models.py`:
+The typed pipeline boundary uses the Pydantic types in `aray/models.py`:
 
 - `NormalizedYaraRule`;
 - `YaraStringEntry` and `YaraStrings`;
@@ -121,19 +155,23 @@ Downstream code accepts these typed entries and converts them to byte ranges. Th
 
 `aray/codegen.py` converts each string entry into bytes:
 
-- ASCII strings become their byte representation;
+- ASCII and UTF-8 strings become their byte representation;
 - hex patterns become parsed byte sequences;
-- `wide` strings become UTF-16LE-compatible data on the PE path;
+- `wide` strings become UTF-16LE-compatible data;
+- `ascii wide` declarations permit either encoding, so construction can use the cheaper ASCII witness;
+- `fullword` witnesses reserve zero-valued boundaries so adjacent data cannot extend the word;
 - unconstrained strings receive deterministic default offsets;
-- constrained strings retain their `at` offsets.
+- exact and ranged strings retain or select a valid placement.
 
-Non-nested constants are encoded little-endian:
+Constants are encoded using the extracted width and byte order:
 
 | YARA condition | Encoding |
 |---|---|
 | `uint16(N) == V` | two little-endian bytes of `V` at file offset `N` |
 | `uint32(N) == V` | four little-endian bytes of `V` at file offset `N` |
+| `uint16be(N) == V` / `uint32be(N) == V` | big-endian bytes at file offset `N` |
 | `uint32(uint32(0x3C)) == 0x00004550` | use the native PE `e_lfanew` pointer and signature |
+| `uint16(uint32(0x3C)+0x18) == 0x010B` | select PE32 and patch/read relative to the actual `e_lfanew` target |
 
 ## Linux ELF Backend
 
@@ -168,6 +206,10 @@ Rules without string offset constraints use MinGW. Strings become C globals and 
 - `PE\0\0` at the location referenced by `e_lfanew`.
 
 This satisfies standard PE YARA checks without modifying structural header bytes.
+Supported nested relative constants are resolved through the generated file's
+actual `e_lfanew` value and patched at that computed target. A predicate such as
+`uint16(uint32(0x3c)+0x18) == 0x10b` selects PE32 and therefore requires
+`i686-w64-mingw32-gcc`; ordinary PE32+ uses the x86-64 compiler.
 
 ### Offset-Aware Runnable PE
 
@@ -197,11 +239,12 @@ Runnable PE data cannot generally occupy offsets inside headers or code, typical
 
 - a DOS header with `MZ` and `e_lfanew`;
 - a PE signature;
-- an AMD64 COFF header with zero sections;
-- a minimal PE32+ optional header;
-- strings at their assigned offsets.
+- a PE32 or PE32+ COFF/optional header selected from supported constraints;
+- strings and supported constants at their assigned offsets.
 
-The artifact is a scanner-oriented PE64 structure, not a runnable replacement for the MinGW output. The current pipeline passes no extracted constants to this writer; its generated structure itself satisfies MZ and nested PE-signature checks.
+The artifact is scanner-oriented, not a runnable replacement for MinGW output.
+Its generated structure satisfies MZ and nested PE-signature checks, while the
+direct writer places the other supported extracted constants.
 
 ## Generic Writer
 
@@ -209,7 +252,7 @@ Non-PE magic at offset zero routes to `write_generic`. It writes a plain buffer 
 
 - rule-owned magic remains at offset zero;
 - other strings are packed from offset `0x10` unless constrained;
-- supported constants are patched little-endian;
+- supported constants are patched using their declared byte order;
 - an extension is selected from known magic bytes.
 
 Known extensions include `.php`, `.asp`, `.zip`, `.png`, `.jpg`, `.gif`, and `.doc`. Unknown magic produces an extensionless `output` file.
@@ -227,6 +270,8 @@ The amount of required padding is deterministic for the current size and bounds;
 Internal checks include:
 
 - Pydantic validation of LLM response structure;
+- deterministic constructibility classification before extraction;
+- deterministic extraction for supported normalized syntax;
 - deterministic cross-validation of format-routing evidence;
 - byte-for-byte verification of offset-aware PE strings;
 - subprocess failure propagation through `check=True`;
@@ -242,6 +287,8 @@ The normal `aray` CLI does not run YARA after construction. This preserves separ
 | `aray/nodes.py` | rule loading, model-assisted stages, routing, generic dispatch |
 | `aray/models.py` | typed model boundary |
 | `aray/llm.py` | structured invocation and JSON fallback |
+| `aray/capabilities.py` | deterministic constructibility preflight |
+| `aray/yara_extraction.py` | deterministic string and integer extraction |
 | `aray/codegen.py` | encoding, offsets, assembly, linker scripts, PE source |
 | `aray/compiler.py` | ELF/PE toolchain backends, patching, placement checks |
 | `aray/artifact_writer.py` | direct ELF64, PE64, and generic writers |
@@ -252,7 +299,7 @@ The normal `aray` CLI does not run YARA after construction. This preserves separ
 - Only a subset of YARA is represented by the extraction schema and backends.
 - Normalization may alter semantics, and judge acceptance is model-dependent.
 - An `uncertain` pipeline judge verdict proceeds to extraction.
-- Nested `uint32` expressions are assumed to indicate PE structure.
+- Supported nested PE-relative integer expressions indicate PE structure; broader computed expressions remain limited.
 - Full-compile output can vary with GCC, Binutils, or MinGW versions.
 - Random filesize padding prevents byte-for-byte reproducibility.
 - Rulesets process only the first non-private rule and its reachable dependency closure. Exactly one rule is sent to the LLM and written as output.

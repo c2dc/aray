@@ -1,8 +1,9 @@
 """Pydantic models for YARA rule extraction."""
 
+import re
 from typing import Literal
 
-from pydantic import BaseModel, Field
+from pydantic import BaseModel, Field, model_validator
 
 
 class JudgeVerdict(BaseModel):
@@ -32,6 +33,7 @@ class NormalizedYaraRule(BaseModel):
 class YaraStringEntry(BaseModel):
     """A string from a YARA rule with optional offset constraint."""
 
+    identifier: str | None = Field(default=None, description="YARA string identifier")
     value: str = Field(description="The string value")
     offset: int | None = Field(
         default=None,
@@ -39,6 +41,32 @@ class YaraStringEntry(BaseModel):
         "(e.g. 0x600), or null if no offset constraint",
     )
     format: Literal["ascii", "hex", "widechar"] = Field(default="ascii", description="The format of the string")
+    match_count: int = Field(default=1, ge=1, description="Required witness occurrences")
+    ascii: bool = Field(default=True, description="Whether the declaration permits ASCII bytes")
+    wide: bool = Field(default=False, description="Whether the declaration permits wide bytes")
+    fullword: bool = Field(default=False, description="Whether fullword matching is required")
+    nocase: bool = Field(default=False, description="Whether case-insensitive matching is permitted")
+    range_start: int | None = Field(default=None, ge=0)
+    range_end: int | None = Field(default=None, ge=0)
+
+    @model_validator(mode="after")
+    def validate_hex_value(self):
+        if self.format != "hex":
+            return self
+        compact = self.value.replace(" ", "")
+        if not compact or len(compact) % 2 or not re.fullmatch(r"[0-9A-Fa-f]+", compact):
+            raise ValueError("hex string values must contain complete hexadecimal bytes")
+        return self
+
+    @model_validator(mode="after")
+    def validate_placement(self):
+        if (self.range_start is None) != (self.range_end is None):
+            raise ValueError("range_start and range_end must be set together")
+        if self.range_start is not None and self.range_start > self.range_end:
+            raise ValueError("range_start must not exceed range_end")
+        if self.offset is not None and self.range_start is not None:
+            raise ValueError("a string cannot have both an exact offset and a range")
+        return self
 
 
 class YaraConstantEntry(BaseModel):
@@ -61,9 +89,22 @@ class YaraConstantEntry(BaseModel):
     )
     is_nested: bool = Field(
         default=False,
-        description="True ONLY when the expression is uint32(uint32(...)) (doubly nested). "
-        "False for uint16(X) or uint32(X).",
+        description="True when the outer uint reads from an inner uint expression. "
+        "False for uint16(X) or uint32(X) with a literal offset.",
     )
+    byte_order: Literal["little", "big"] = Field(default="little")
+    signed: bool = Field(default=False)
+    relative_offset: int = Field(default=0, ge=0)
+
+    @model_validator(mode="after")
+    def validate_literal(self):
+        if not re.fullmatch(r"0[xX][0-9A-Fa-f]+", self.value):
+            raise ValueError("constant values must be hexadecimal literals with a 0x prefix")
+        if int(self.value, 16) >= 1 << (self.size * 8):
+            raise ValueError("constant value does not fit the declared size")
+        if self.offset is not None and self.offset < 0:
+            raise ValueError("constant offsets must be non-negative")
+        return self
 
 
 class YaraStrings(BaseModel):

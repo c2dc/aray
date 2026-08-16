@@ -5,54 +5,46 @@ Aray includes two batch tools:
 - `aray-eval` runs the complete pipeline, invokes the real YARA CLI on each artifact, and records end-to-end matches.
 - `aray-normalize` evaluates only rule normalization and writes normalized rules to a mirrored directory tree.
 
-## Published Results
+## Deterministic Corpus Validation
 
-The only official published results are the following two full-compile reports
-over 416 rules from [Yara-Rules/rules](https://github.com/Yara-Rules/rules):
+Aray's primary artifact validation uses 416 real-world rules from
+[Yara-Rules/rules](https://github.com/Yara-Rules/rules), fixed at upstream commit
+`0f93570194a80d2f2032869055808b0ddcdfb360` and stored as a pre-normalized corpus.
 
-| Provider/model configuration | Official report | Passed | Failed | Success rate | Duration |
-|---|---|---:|---:|---:|---:|
-| GPT-4.1 | `evaluation/reports/2026-08-14T09-32-09-gpt-4.1/eval_report.json` | 404 | 12 | **97.1%** | 21m 52.6s |
-| GLM-5.2 Cloud (`glm-5.2:cloud`) | `evaluation/reports/2026-08-14T13-07-22-eval-glm-5.2/eval_report.json` | 404 | 12 | **97.1%** | 51m 10.5s |
+| Mode | Matches | Preflight dispositions | Rules using an LLM | Success rate |
+|---|---:|---:|---:|---:|
+| Full compile, 1 worker | 406 | 10 | **0** | **97.6%** |
 
-Both reports use exactly the same frozen input corpus and corpus hash:
-`evaluation/normalized-glm-5.2-stable` and
-`0ad4e608372828e1aaa996c6f1f15bd1629e4c8d4f087316f98b62caff5813a5`.
-The rules had already been normalized, and no result entered the normalization
-and judge loop. The reports measure
-compatibility of each configured provider with the pipeline, deterministic
-extraction, full-compile toolchains and backends, and final YARA verification.
-For supported fixed constructs, deterministic extraction is authoritative; an
-extraction-model response cannot override it.
+This is a validation of the deterministic pipeline, not a model evaluation:
 
-These results must not be read as a model normalization leaderboard or combined
-with earlier experiments, targeted reruns, or projections. Full-corpus runs with
-smaller models such as Phi and Qwen are planned, but no results are published for
-them yet.
+- all 416 inputs were already normalized and skipped the normalization/judge loop;
+- all 406 rules that passed capability preflight used deterministic string extraction;
+- the same 406 rules used deterministic constant extraction;
+- 10 rules stopped at preflight and never reached either extractor;
+- no rule used normalization or extraction LLM fallback.
 
-### Report Completeness and Environment
+A canonical control run configured an intentionally unreachable endpoint at
+`127.0.0.1:9`; it still completed with 406 matches and telemetry reported
+`rules_using_llm=0`. Separate runs configured the extraction role as
+`glm-5.2:cloud`, `qwen3.5:4b`, `phi-4:14b`, and `gpt-4.1` and produced the same
+result without invoking those models. The names are inactive configuration
+cross-checks, not comparable model measurements.
 
-Both official files use diagnostic schema 2.1 and contain all 416 per-rule
-records. Their metadata and serialized results agree on 404 passed, 12 failed,
-and zero skipped. The two runs used `scan_only=false`, structured output, one
-worker, the same recorded Git commit, and the same Linux, Python, YARA, GCC, and
-MinGW x86-64 environment. Both reports record a dirty worktree, so the commit ID
-alone does not fully identify the source snapshot.
+The [versioned machine-readable summary](assets/yara-rules-416-deterministic.json)
+records the corpus commit and digest, execution mode, processing paths, result,
+and failure set. Both x86-64 and i686 MinGW toolchains were installed.
 
-The environment did not contain `i686-w64-mingw32-gcc`. Two PE32 rules reached
-construction but could not produce an artifact for that reason. They remain
-failures in the observed 404/416 result; no adjusted success rate is published.
+### Dispositions and Failures
 
-### Official Failures
+The validation records 406 `matched`, seven `unsupported`, two `infeasible`, and one
+`unsatisfiable` dispositions. There are zero `unexplained_mismatch` and zero
+`construction_failed` results.
 
-The same 12 rules failed in both official runs:
-
-| Category | Count | Official cases |
+| Failure category | Count | Current cases |
 |---|---:|---|
-| Unsupported YARA `pe.*` conditions | 7 | `APT_CrashOverride`, `APT_Shamoon_StoneDrill`, `MALW_Batel`, `MALW_IcedID`, `MALW_Pyinstaller`, `RANSOM_Stampado`, `peid` |
-| Infeasible whole-file hash predicates | 2 | `APT_Grasshopper`, `RAT_CrossRAT` |
-| Unsatisfiable out-of-range `uint32` equality | 1 | `APT_Derusbi` |
-| Missing i686 MinGW compiler | 2 | `RAT_FlyingKitten`, `packer_compiler_signatures` |
+| `unsupported_pe_module` | 7 | `APT_CrashOverride`, `APT_Shamoon_StoneDrill`, `MALW_Batel`, `MALW_IcedID`, `MALW_Pyinstaller`, `RANSOM_Stampado`, `peid` |
+| `whole_file_hash_preimage` | 2 | `APT_Grasshopper`, `RAT_CrossRAT` |
+| `integer_value_out_of_range` | 1 | `APT_Derusbi` |
 
 The seven `pe.*` cases require these module-level semantics:
 
@@ -75,51 +67,25 @@ PE routing evidence and do not reach extraction or construction.
 Evaluate one file:
 
 ```bash
-uv run aray-eval evaluation/rules/cve_rules/example.yar --scan-only
+uv run aray-eval evaluation/yara-repos/rules/cve_rules/CVE-2010-0805.yar --scan-only
 ```
 
 Evaluate one directory:
 
 ```bash
-uv run aray-eval evaluation/rules/cve_rules --scan-only
+uv run aray-eval evaluation/yara-repos/rules/cve_rules --scan-only
 ```
 
 Evaluate any combination of files and directories with parallel workers:
 
 ```bash
 uv run aray-eval \
-  evaluation/rules/cve_rules \
-  evaluation/rules/malware/example.yar \
+  evaluation/yara-repos/rules/cve_rules \
+  evaluation/yara-repos/rules/malware/APT_Casper.yar \
   --workers 4 \
   --scan-only \
   --output eval_report.json
 ```
-
-Rerun only failed cases from an earlier report:
-
-```bash
-REPORT=evaluation/reports/<run>/eval_report.json
-
-uv run aray-eval \
-  $(uv run python -c '
-import json, sys
-for result in json.load(open(sys.argv[1]))["results"]:
-    if result["status"] == "failed":
-        print(result["rule_path"])
-' "$REPORT") \
-  --model glm-5.2:cloud \
-  --base-url http://localhost:11434/v1 \
-  --workers 1 \
-  --output evaluation/reports/failed-retest/eval_report.json
-```
-
-Positional paths replace the configured `.evaluator` input directories. The
-targeted report contains only the selected failures; it is not automatically
-merged with the earlier full-corpus report.
-
-The two official schema 2.1 reports contain every failed record, so this command
-can select all 12 cases from either report. A targeted rerun remains a separate
-experiment and does not replace the published full-corpus baseline.
 
 Useful options:
 
@@ -131,23 +97,16 @@ Useful options:
 | `--keep-artifacts` | preserve per-rule temporary builds |
 | `--scan-only` | avoid GCC and MinGW |
 | `--model`, `--base-url` | shared model configuration |
-| role-specific model, URL, key, and streaming flags | same semantics as `aray` |
+| role-specific model, URL, key, reasoning, and streaming flags | same semantics as `aray` |
 
 Without `--output`, reports are written to `evaluation/reports/<timestamp>/eval_report.json`.
 The CLI prints the report's absolute path after writing it. When
 `--keep-artifacts` is enabled, it also prints the absolute temporary directory
 preserved for each evaluated rule.
 
-Evaluation reports use the additive diagnostic schema
-`aray.diagnostic-evaluation` version `2.1`. Existing result fields remain
-available, with environment/tool metadata, structured failure fingerprints,
-pipeline node timings and final state, compiler and YARA diagnostics, bounded
-tracebacks, and SHA-256 manifests added for troubleshooting. Text is truncated
-and credential-shaped fields and values are redacted; API keys are never
-written. Report-level summaries include deterministic failure clusters and
-disposition counts. Schema 2.1 also records corpus, source, selected-rule, and
-normalized-rule hashes plus Git and toolchain provenance, and refuses to write a
-report if the serialized result count differs from `metadata.total`.
+Evaluation reports currently contain three top-level fields: `metadata`,
+`results`, and `summary`. Metadata records counts, aggregate duration, and the
+non-secret evaluator configuration. API keys are never written to reports.
 
 `status` remains the coarse execution outcome: `passed`, `failed`, or `skipped`.
 `disposition` explains the semantic outcome, including `matched`, `unsupported`,
@@ -155,18 +114,12 @@ report if the serialized result count differs from `metadata.total`.
 and `unexplained_mismatch`. A preflight disposition still has `status="failed"`
 because no matching artifact was produced.
 
-Each result also includes `artifact_analysis`, which records:
-
-- artifact size, SHA-256, initial header bytes, and filesize satisfaction;
-- every extracted string identifier, format, expected bytes, required and
-  observed match counts, expected offset, and first observed offsets;
-- expected and observed constant bytes, width, byte order, and offset status;
-- unsupported `hash.*`, `pe.*`, and `math.*` references detected in the rule.
-
-Compiler invocations retain sanitized argv, return code, duration, stdout, and
-stderr. Pipeline exceptions retain a bounded traceback and the last known state,
-even when no final LangGraph state is returned. Binary contents are not embedded
-in the report.
+Each result records the rule path and name, status, error, duration, YARA output
+and return code, configured model names, normalization verdict/reason,
+disposition, failure category, normalization path, string/constant extraction
+paths, and whether an LLM was actually used. The summary aggregates
+`disposition_counts`, `failure_categories`, `processing_paths`, and `llm_usage`;
+reports do not embed artifacts.
 
 Calling `aray-eval` without arguments prints the standard help and exits with
 status `0`. To process paths from `.evaluator` without positional inputs, pass
@@ -179,8 +132,8 @@ the configuration option explicitly: `aray-eval --config .evaluator`.
 ```toml
 [evaluator]
 directories = [
-  "evaluation/rules/cve_rules",
-  "evaluation/rules/malware",
+  "evaluation/yara-repos/rules/cve_rules",
+  "evaluation/yara-repos/rules/malware",
 ]
 model = "gpt-4.1"
 base_url = "http://localhost:11434/v1"
@@ -188,6 +141,8 @@ base_url = "http://localhost:11434/v1"
 # extract_model = "gpt-4.1-mini"
 # normalize_api_key = "sk-..."
 # extract_api_key = "not-needed"
+extract_reasoning_effort = "none"
+extract_no_stream = true
 workers = 4
 scan_only = true
 keep_artifacts = false
@@ -205,83 +160,38 @@ Index files named `index.yar`, `*_index.yar`, or `index_*.yar`, and files beginn
 
 ### Report Shape
 
-```json
-{
-  "schema": {
-    "name": "aray.diagnostic-evaluation",
-    "version": "2.1"
-  },
-  "metadata": {
-    "timestamp": "2026-03-08T14:22:01",
-    "total": 42,
-    "passed": 35,
-    "failed": 5,
-    "skipped": 2,
-    "duration_seconds": 183.4,
-    "corpus_sha256": "...",
-    "config": {
-      "model": "gpt-4.1",
-      "workers": 4,
-      "scan_only": true
-    }
-  },
-  "summary": {
-    "status_counts": {"passed": 35, "failed": 5, "skipped": 2},
-    "disposition_counts": {"matched": 35, "unsupported": 3, "infeasible": 2, "skipped": 2},
-    "failure_categories": {"infeasible_constraint": 2, "unsupported_capability": 3}
-  },
-  "failure_clusters": [],
-  "results": [
-    {
-      "rule_path": "evaluation/rules/cve_rules/CVE-2010-0805.yar",
-      "rule_name": "MSIETabularActivex",
-      "status": "passed",
-      "disposition": "matched",
-      "error": null,
-      "yara_stdout": "MSIETabularActivex /tmp/.../linux/app\n",
-      "yara_returncode": 0,
-      "normalize_model": "gpt-4.1",
-      "extract_model": "gpt-4.1-mini",
-      "normalize_verdict": "passed",
-      "source_sha256": "...",
-      "selected_rule_sha256": "...",
-      "normalized_rule_sha256": "...",
-      "failure": null,
-      "pipeline": {
-        "node_sequence": ["read_yara", "assess_constructibility", "extract_strings", "compile"],
-        "nodes": [],
-        "final_state": {}
-      },
-      "compiler_subprocesses": [],
-      "yara_stderr": "",
-      "artifacts": [
-        {"path": "linux/app", "size": 1016, "sha256": "..."}
-      ],
-      "generated_files": [],
-      "artifact_analysis": {
-        "size_bytes": 1016,
-        "strings": [],
-        "constants": []
-      }
-    }
-  ]
-}
-```
-
-Each result distinguishes pipeline errors, normalization failures, preflight
-classifications, build failures, YARA errors, and successful or unsuccessful
-scans. Failure fingerprints are deterministic operational groupings;
-byte-level `artifact_analysis` provides the finer evidence needed to separate
-otherwise identical YARA no-match results.
+The `metadata` object contains `timestamp`, `total`, `passed`, `failed`,
+`skipped`, `duration_seconds`, and `config`. The `results` array contains one
+`EvalResult` object per processed rule. The `summary` object contains
+`disposition_counts`, `failure_categories`, `processing_paths`, and `llm_usage`.
+This is the complete current report shape; consumers should not assume
+additional diagnostics or manifests.
 
 ## Normalization Evaluator
 
 `aray-normalize` runs normalization without extraction or artifact construction. It writes each normalized rule under an output tree that mirrors the input and asks a separate model to assess quality.
 
+### Preserved Normalization Results
+
+Normalization remains an explicitly model-dependent experiment and is reported
+separately from deterministic artifact validation:
+
+| Run | Scope | Passed | Failed | Already normalized | Duration |
+|---|---:|---:|---:|---:|---:|
+| GLM-5.2 normalizer and judge | 416 | 416 | 0 | 182 | 55m 00.854s |
+| GPT-4.1 normalizer and judge | 416 | 407 | 9 | 182 | 14m 18.432s |
+| GPT-4.1 targeted failure retest | 21 | 17 | 4 | 0 | 2m 04.308s |
+
+The targeted retest is not directly comparable to either full-corpus run. The
+three raw normalization reports remain under `evaluation/reports/`, and the
+accepted GLM-5.2 corpus remains frozen under
+`evaluation/normalized-glm-5.2-stable`; previous artifact-pipeline experiments
+were removed.
+
 Normalize one file:
 
 ```bash
-uv run aray-normalize evaluation/rules/cve_rules/example.yar
+uv run aray-normalize evaluation/yara-repos/rules/cve_rules/CVE-2010-0805.yar
 ```
 
 The result of a standalone file is written directly below `--output-root`, for
@@ -290,13 +200,13 @@ mirrored directory structure. At the end, the CLI lists the absolute path of
 every normalized file and the report it generated.
 
 ```bash
-uv run aray-normalize evaluation/rules/cve_rules
+uv run aray-normalize evaluation/yara-repos/rules/cve_rules
 ```
 
 Custom output and judge:
 
 ```bash
-uv run aray-normalize evaluation/rules/cve_rules \
+uv run aray-normalize evaluation/yara-repos/rules/cve_rules \
   --output-root /tmp/normalized \
   --output /tmp/norm_report.json \
   --judge-model gpt-4.1 \
@@ -324,8 +234,8 @@ Useful options:
 ```toml
 [normalizer]
 directories = [
-  "evaluation/rules/cve_rules",
-  "evaluation/rules/malware",
+  "evaluation/yara-repos/rules/cve_rules",
+  "evaluation/yara-repos/rules/malware",
 ]
 output_root = "evaluation/normalized"
 model = "gpt-4.1"
@@ -347,9 +257,10 @@ only the inputs configured in TOML.
 Unless explicitly overridden, the judge inherits the effective normalization
 model, endpoint, and credential. API keys are not stored in reports.
 
-An input such as `evaluation/rules/cve_rules/Foo.yar` is written as `evaluation/normalized/cve_rules/Foo.yar`.
+An input such as `evaluation/yara-repos/rules/cve_rules/Foo.yar` is written as `evaluation/normalized/cve_rules/Foo.yar`.
 
-The normalized file is retained even when the judge returns `failed` or `uncertain`, making the output available for inspection and dataset work.
+Only accepted candidates are retained. A `failed` or `uncertain` verdict removes
+any stale output for that rule after retries are exhausted.
 
 Retained regex replacements are validated deterministically with `yara-python` before the LLM judge runs. Judge criteria then include subset correctness, modifier preservation, YARA syntax, and construction cost:
 
@@ -383,21 +294,25 @@ Coverage includes:
 - compilation followed by real YARA scans;
 - runnable ELF execution and optional PE execution under Wine.
 
-Real-model end-to-end tests are marked separately:
+Tests that intentionally require normalization or extraction fallback are marked separately:
 
 ```bash
 uv run pytest -m llm -v
 ```
 
-They require `OPENAI_API_KEY` and are skipped automatically when it is absent. Explicitly selecting `not llm` is recommended for a guaranteed offline run, even when credentials exist in the environment.
+They require `OPENAI_API_KEY` and are skipped automatically when it is absent.
+Supported fixed rules may still take the deterministic path even inside broader
+end-to-end scenarios. Explicitly selecting `not llm` guarantees an offline run.
 
 ## Interpreting Results
 
-The official success rates use a frozen, already-normalized corpus. They combine
-provider and extraction-call compatibility, authoritative deterministic
-fixed-evidence extraction, deterministic format routing and construction,
-full-compile toolchain behavior, and final acceptance by YARA. They do not
-measure or compare normalization quality.
+The current success rate uses a frozen, already-normalized corpus. Telemetry
+records zero rules using an LLM, deterministic extraction for all 406 rules that
+reached that stage, and 10 preflight terminations. It combines deterministic
+constructibility assessment, extraction, format routing and construction,
+full-compile toolchain behavior, and final acceptance by YARA. It does not
+measure normalization, extraction-model quality, latency, cost, or provider
+performance.
 
 The results should not be read as full YARA-language coverage or as a guarantee
 that every artifact is executable. In particular, `pe.*` remains outside scope.

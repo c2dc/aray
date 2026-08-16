@@ -103,11 +103,13 @@ def write_linux_artifact(
             value = entry.get("value")
             size = entry.get("size", 4)
             is_nested = entry.get("is_nested", False)
+            byte_order = entry.get("byte_order", "little")
         else:
             offset = entry.offset
             value = entry.value
             size = entry.size
             is_nested = entry.is_nested
+            byte_order = entry.byte_order
 
         if offset is None or is_nested:
             continue
@@ -115,7 +117,7 @@ def write_linux_artifact(
         if isinstance(value, str):
             value = int(value, 16) if value.startswith(("0x", "0X")) else int(value)
 
-        buf[offset : offset + size] = value.to_bytes(size, byteorder="little")
+        buf[offset : offset + size] = value.to_bytes(size, byteorder=byte_order)
 
     buf = bytes(buf)
     if filesize_constraint:
@@ -215,11 +217,13 @@ def write_pe_artifact(
             value = entry.get("value")
             size = entry.get("size", 4)
             is_nested = entry.get("is_nested", False)
+            byte_order = entry.get("byte_order", "little")
         else:
             offset = entry.offset
             value = entry.value
             size = entry.size
             is_nested = entry.is_nested
+            byte_order = entry.byte_order
 
         if offset is None or is_nested:
             continue
@@ -227,7 +231,7 @@ def write_pe_artifact(
         if isinstance(value, str):
             value = int(value, 16) if value.startswith(("0x", "0X")) else int(value)
 
-        buf[offset : offset + size] = value.to_bytes(size, byteorder="little")
+        buf[offset : offset + size] = value.to_bytes(size, byteorder=byte_order)
 
     result = bytes(buf)
     if filesize_constraint:
@@ -266,26 +270,27 @@ def write_generic_artifact(
     table (e.g. ``b'\\x89PNG'`` → ``".png"``).  Falls back to ``""`` when no
     known magic is matched.
     """
+    from aray.codegen import _constants_to_sections
+
+    constant_sections = _constants_to_sections(constants)
+
     # Determine required buffer size from sections and constants.
     required = 0
     for offset, data in sections:
         if data:
             required = max(required, offset + len(data))
-    for entry in constants:
-        if isinstance(entry, dict):
-            off = entry.get("offset")
-            sz = entry.get("size", 4)
-        else:
-            off = entry.offset
-            sz = entry.size
-        if off is not None:
-            required = max(required, off + sz)
+    for offset, data in constant_sections:
+        required = max(required, offset + len(data))
 
     required = max(required, 0x200)
     buf = bytearray(required)
 
     # Write section data.
     for offset, data in sections:
+        if data:
+            buf[offset : offset + len(data)] = data
+
+    for offset, data in constant_sections:
         if data:
             buf[offset : offset + len(data)] = data
 
@@ -296,11 +301,13 @@ def write_generic_artifact(
             value = entry.get("value")
             size = entry.get("size", 4)
             is_nested = entry.get("is_nested", False)
+            byte_order = entry.get("byte_order", "little")
         else:
             offset = entry.offset
             value = entry.value
             size = entry.size
             is_nested = entry.is_nested
+            byte_order = entry.byte_order
 
         if offset is None or is_nested:
             continue
@@ -308,7 +315,7 @@ def write_generic_artifact(
         if isinstance(value, str):
             value = int(value, 16) if value.startswith(("0x", "0X")) else int(value)
 
-        buf[offset : offset + size] = value.to_bytes(size, byteorder="little")
+        buf[offset : offset + size] = value.to_bytes(size, byteorder=byte_order)
 
     buf = bytes(buf)
     if filesize_constraint:

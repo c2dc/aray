@@ -9,7 +9,7 @@ from langgraph.graph import END, START, StateGraph
 from aray.compiler import compile_binary
 from aray.config import PipelineConfig
 from aray.constants import DUMMY_API_KEY
-from aray.nodes import check_normalization_needed, extract_constants, extract_strings, fail_normalization, judge_rule, normalize_rule, read_yara_rule, route_file_type, write_generic
+from aray.nodes import assess_constructibility, check_normalization_needed, extract_constants, extract_strings, fail_construction, fail_normalization, judge_rule, normalize_rule, read_yara_rule, route_file_type, write_generic
 from aray.state import ArayGraphState
 
 _MAX_NORMALIZE_ATTEMPTS = 3
@@ -33,8 +33,8 @@ def _file_type_router(state: ArayGraphState) -> str:
 
 
 def _normalization_router(state: ArayGraphState) -> str:
-    """Route to normalize_rule if needed, or skip directly to extract_strings."""
-    return "normalize_rule" if state.get("needs_normalization", True) else "extract_strings"
+    """Route to normalize_rule if needed, or continue to preflight."""
+    return "normalize_rule" if state.get("needs_normalization", True) else "assess_constructibility"
 
 
 def _judge_router(state: ArayGraphState) -> str:
@@ -43,7 +43,15 @@ def _judge_router(state: ArayGraphState) -> str:
         if state.get("normalize_attempts", 0) < _MAX_NORMALIZE_ATTEMPTS:
             return "normalize_rule"
         return "fail_normalization"   # exhausted retries — bail out
-    return "extract_strings"
+    return "assess_constructibility"
+
+
+def _constructibility_router(state: ArayGraphState) -> str:
+    return (
+        "extract_strings"
+        if state.get("constructibility") == "constructible"
+        else "fail_construction"
+    )
 
 
 def build_graph(config: PipelineConfig | None = None) -> StateGraph:
@@ -60,6 +68,8 @@ def build_graph(config: PipelineConfig | None = None) -> StateGraph:
         # ChatOpenAI's own env defaults (OPENAI_BASE_URL / OPENAI_API_KEY)
         # instead of being forced to None.
         kwargs = {"model": node.model, "streaming": _resolve(node.streaming, config.streaming)}
+        if node.reasoning_effort:
+            kwargs["reasoning_effort"] = node.reasoning_effort
         if node.base_url:
             kwargs["base_url"] = node.base_url
         if node.api_key:
@@ -89,6 +99,8 @@ def build_graph(config: PipelineConfig | None = None) -> StateGraph:
     builder.add_node("extract_strings", _w("extract_strings", functools.partial(extract_strings, llm=extract_llm, use_structured=use_structured)))
     builder.add_node("extract_constants", _w("extract_constants", functools.partial(extract_constants, llm=extract_llm, use_structured=use_structured)))
     builder.add_node("fail_normalization", _w("fail_normalization", fail_normalization))
+    builder.add_node("assess_constructibility", _w("assess_constructibility", assess_constructibility))
+    builder.add_node("fail_construction", _w("fail_construction", fail_construction))
     builder.add_node("compile", _w("compile", functools.partial(compile_binary, scan_only=config.scan_only, debug=debug)))
     builder.add_node("route_file_type", _w("route_file_type", route_file_type))
     builder.add_node("write_generic", _w("write_generic", functools.partial(write_generic, debug=debug)))
@@ -98,14 +110,19 @@ def build_graph(config: PipelineConfig | None = None) -> StateGraph:
     builder.add_conditional_edges(
         "check_normalization_needed",
         _normalization_router,
-        {"normalize_rule": "normalize_rule", "extract_strings": "extract_strings"},
+        {"normalize_rule": "normalize_rule", "assess_constructibility": "assess_constructibility"},
     )
     builder.add_edge("normalize_rule", "judge_rule")
     builder.add_conditional_edges(
         "judge_rule", _judge_router,
         {"normalize_rule": "normalize_rule",
-         "extract_strings": "extract_strings",
+         "assess_constructibility": "assess_constructibility",
          "fail_normalization": "fail_normalization"},
+    )
+    builder.add_conditional_edges(
+        "assess_constructibility",
+        _constructibility_router,
+        {"extract_strings": "extract_strings", "fail_construction": "fail_construction"},
     )
     builder.add_edge("extract_strings", "extract_constants")
     builder.add_edge("extract_constants", "route_file_type")
@@ -114,6 +131,7 @@ def build_graph(config: PipelineConfig | None = None) -> StateGraph:
         {"compile": "compile", "write_generic": "write_generic"},
     )
     builder.add_edge("fail_normalization", END)
+    builder.add_edge("fail_construction", END)
     builder.add_edge("compile", END)
     builder.add_edge("write_generic", END)
 

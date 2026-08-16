@@ -1,0 +1,121 @@
+{
+  "schema_version": 1,
+  "recorded_at": "2026-08-15",
+  "claim": "The pre-normalized 416-rule corpus used no LLM during normalization or extraction; every rule that reached extraction was handled deterministically.",
+  "corpus": {
+    "source": "https://github.com/Yara-Rules/rules",
+    "source_commit": "0f93570194a80d2f2032869055808b0ddcdfb360",
+    "local_path": "evaluation/normalized-glm-5.2-stable",
+    "rule_count": 416,
+    "sha256_of_sorted_file_hash_manifest": "3dc8ccb0fa1ad2b538b3d08f7a43af66cee4a300d0e7f3d5149568c2299621cc",
+    "digest_command": "rg --files evaluation/normalized-glm-5.2-stable -g '*.yar' -0 | sort -z | xargs -0 sha256sum | sha256sum"
+  },
+  "canonical_validation": {
+    "command": "uv run aray-eval --config .evaluator --model deterministic-control --base-url http://127.0.0.1:9/v1 --workers 1 --output /tmp/opencode/aray-deterministic-report.json",
+    "mode": "full_compile",
+    "scan_only": false,
+    "workers": 1,
+    "duration_seconds": 12.806,
+    "model_control": {
+      "configured_model": "deterministic-control",
+      "base_url": "http://127.0.0.1:9/v1",
+      "endpoint_expected_to_be_unreachable": true,
+      "purpose": "Any attempted LLM invocation would make the run fail."
+    },
+    "toolchains": [
+      "gcc",
+      "x86_64-w64-mingw32-gcc",
+      "i686-w64-mingw32-gcc",
+      "yara"
+    ],
+    "result": {
+      "matched": 406,
+      "unsupported": 7,
+      "infeasible": 2,
+      "unsatisfiable": 1,
+      "unexplained_mismatch": 0,
+      "construction_failed": 0,
+      "success_rate_percent": 97.6
+    },
+    "processing_paths": {
+      "normalization": {
+        "not_needed": 416
+      },
+      "strings_extraction": {
+        "deterministic": 406,
+        "not_reached": 10,
+        "llm_fallback": 0
+      },
+      "constants_extraction": {
+        "deterministic": 406,
+        "not_reached": 10,
+        "llm_fallback": 0
+      },
+      "llm_usage": {
+        "rules_using_llm": 0,
+        "rules_without_llm": 416
+      }
+    }
+  },
+  "configuration_cross_checks": [
+    {
+      "configured_extract_model": "glm-5.2:cloud",
+      "matched": 406,
+      "failed": 10,
+      "llm_invoked": false
+    },
+    {
+      "configured_extract_model": "qwen3.5:4b",
+      "matched": 406,
+      "failed": 10,
+      "llm_invoked": false
+    },
+    {
+      "configured_extract_model": "phi-4:14b",
+      "matched": 406,
+      "failed": 10,
+      "llm_invoked": false
+    },
+    {
+      "configured_extract_model": "gpt-4.1",
+      "matched": 406,
+      "failed": 10,
+      "llm_invoked": false
+    }
+  ],
+  "failure_categories": {
+    "unsupported_pe_module": [
+      "APT_CrashOverride",
+      "APT_Shamoon_StoneDrill",
+      "MALW_Batel",
+      "MALW_IcedID",
+      "MALW_Pyinstaller",
+      "RANSOM_Stampado",
+      "peid"
+    ],
+    "whole_file_hash_preimage": [
+      "APT_Grasshopper",
+      "RAT_CrossRAT"
+    ],
+    "integer_value_out_of_range": [
+      "APT_Derusbi"
+    ]
+  },
+  "interpretation": {
+    "measures": [
+      "deterministic YARA constraint extraction",
+      "capability preflight",
+      "artifact construction",
+      "compiler and linker behavior",
+      "final YARA matching"
+    ],
+    "does_not_measure": [
+      "LLM extraction quality",
+      "LLM latency",
+      "LLM cost",
+      "provider performance",
+      "normalization quality"
+    ],
+    "note": "The four model names above were inactive configuration controls, not model benchmarks. The normalization experiments are maintained separately."
+  }
+}

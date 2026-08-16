@@ -1,6 +1,10 @@
 """LLM configuration dataclasses for the aray pipeline."""
 
 from dataclasses import dataclass, field
+from typing import Literal
+
+
+ReasoningEffort = Literal["none", "low", "medium", "high", "max"]
 
 
 @dataclass
@@ -19,6 +23,7 @@ class LLMNodeConfig:
     base_url: str | None = None
     api_key: str | None = None
     streaming: bool | None = None
+    reasoning_effort: ReasoningEffort | None = None
 
 
 @dataclass

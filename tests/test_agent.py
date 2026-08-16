@@ -11,6 +11,12 @@ from langchain_core.messages import HumanMessage, SystemMessage
 
 from aray.constants import BANNER, BUILD_DIR_GENERIC, BUILD_DIR_WIN, MINGW_GCC
 from aray.models import NormalizedYaraRule, YaraConstants, YaraConstantEntry, YaraStringEntry, YaraStrings
+from aray.yara_extraction import (
+    UnsupportedExtractionError,
+    UnsatisfiableExtractionError,
+    extract_constants_deterministic,
+    extract_strings_deterministic,
+)
 from aray.state import ArayGraphState
 from aray.llm import _invoke_llm
 from aray.artifact_writer import _compute_padding, write_generic_artifact, write_linux_artifact, write_pe_artifact
@@ -21,12 +27,14 @@ from aray.codegen import (
     _format_hex_initializer,
     _generate_asm_source,
     _generate_linker_script,
+    generate_pe_offset_c_source,
     _hex_str_to_bytes,
     _int_to_le_bytes,
     _resolve_yara_hex,
 )
-from aray.compiler import _parse_filesize_constraint, _patch_constants, compile_binary
-from aray.nodes import _requires_normalization, check_normalization_needed, extract_constants, extract_strings, fail_normalization, normalize_rule, read_yara_rule, route_file_type, write_generic
+from aray.capabilities import assess_constructibility as assess_capability
+from aray.compiler import _parse_filesize_constraint, _patch_constants, _patch_pe_constants, compile_binary
+from aray.nodes import _requires_normalization, assess_constructibility, check_normalization_needed, extract_constants, extract_strings, fail_normalization, normalize_rule, read_yara_rule, route_file_type, write_generic
 from aray.evaluator import EvalConfig, _run_one
 from aray.cli import _clean_build_outputs, parse_args
 
@@ -78,6 +86,20 @@ class TestYaraStringEntry:
         with pytest.raises(Exception):
             YaraStringEntry(value="x", format="wide")
 
+    def test_invalid_hex_value_rejected(self):
+        with pytest.raises(Exception, match="complete hexadecimal bytes"):
+            YaraStringEntry(value="/Subtype/Flash", format="hex")
+
+
+class TestYaraConstantEntry:
+    def test_invalid_literal_rejected(self):
+        with pytest.raises(Exception, match="hexadecimal literals"):
+            YaraConstantEntry(value="{}", offset=0, size=2)
+
+    def test_value_must_fit_size(self):
+        with pytest.raises(Exception, match="does not fit"):
+            YaraConstantEntry(value="0x10000", offset=0, size=2)
+
 
 class TestYaraStrings:
     def test_empty_strings_list(self):
@@ -91,6 +113,215 @@ class TestYaraStrings:
         ]
         result = YaraStrings(strings=entries)
         assert len(result.strings) == 2
+
+
+class TestDeterministicExtraction:
+    def test_extracts_literal_hex_wide_and_offsets(self):
+        rule = r'''
+rule Sample {
+  strings:
+    $a = "hello"
+    $b = { de ad be ef }
+    $c = "wide" wide
+  condition:
+    $a at 0x20 and $b and $c
+}
+'''
+
+        entries = extract_strings_deterministic(rule)
+
+        assert [
+            entry.model_dump(include={"value", "offset", "format"})
+            for entry in entries
+        ] == [
+            {"value": "hello", "offset": 0x20, "format": "ascii"},
+            {"value": "DE AD BE EF", "offset": None, "format": "hex"},
+            {"value": "wide", "offset": None, "format": "widechar"},
+        ]
+
+    def test_ascii_wide_uses_cheaper_ascii_witness(self):
+        rule = 'rule Sample { strings: $a = "both" ascii wide condition: $a }'
+        assert extract_strings_deterministic(rule)[0].format == "ascii"
+
+    def test_control_bytes_use_exact_hex_witness(self):
+        rule = r'rule Sample { strings: $a = "line\n" condition: $a }'
+        entry = extract_strings_deterministic(rule)[0]
+        assert entry.value == "6C 69 6E 65 0A"
+        assert entry.format == "hex"
+
+    def test_multiple_at_constraints_duplicate_the_witness(self):
+        rule = (
+            'rule Sample { strings: $a = "same" condition: '
+            '$a at 0x20 and $a at 64 }'
+        )
+        assert [entry.offset for entry in extract_strings_deterministic(rule)] == [0x20, 64]
+
+    def test_negative_only_strings_are_not_embedded(self):
+        rule = (
+            'rule Sample { strings: $bad = "forbidden" $good = "required" '
+            'condition: not $bad and $good }'
+        )
+
+        entries = extract_strings_deterministic(rule)
+
+        assert [entry.identifier for entry in entries] == ["$good"]
+
+    def test_match_count_becomes_repeated_witnesses(self):
+        rule = 'rule Sample { strings: $a = "repeat" condition: #a > 2 }'
+        entry = extract_strings_deterministic(rule)[0]
+
+        assert entry.match_count == 3
+        assert len(_assign_offsets([entry], default_base=0x100, pack=True)) == 3
+
+    def test_range_constraint_is_preserved_and_placed(self):
+        rule = 'rule Sample { strings: $a = "range" condition: $a in (0x20..0x40) }'
+        entry = extract_strings_deterministic(rule)[0]
+
+        assert (entry.range_start, entry.range_end) == (0x20, 0x40)
+        assert _assign_offsets([entry])[0][0] == 0x20
+
+    def test_range_placement_avoids_reserved_constant_bytes(self):
+        entry = YaraStringEntry(
+            value="range", format="ascii", range_start=0, range_end=0x40
+        )
+
+        sections = _assign_offsets(
+            [entry], reserved_sections=[(0, b"MZ"), (0x10, b"PE\x00\x00")]
+        )
+
+        assert sections[0][0] == 2
+
+    def test_fullword_range_reserves_zero_boundaries(self):
+        entry = YaraStringEntry(
+            value="word", fullword=True, range_start=0, range_end=0x40
+        )
+
+        sections = _assign_offsets([entry], reserved_sections=[(0, b"MZ")])
+
+        offset, data = sections[0]
+        assert offset == 3
+        assert data == b"word\x00"
+
+    def test_dynamic_at_constraint_requires_fallback(self):
+        rule = 'rule Sample { strings: $a = "x" condition: $a at pe.entry_point }'
+        with pytest.raises(UnsupportedExtractionError, match="literal integer offset"):
+            extract_strings_deterministic(rule)
+
+    def test_extracts_direct_and_nested_constants(self):
+        rule = (
+            'rule Sample { condition: uint16(0) == 0x5a4d and '
+            'uint32(uint32(0x3c)) == 0x4550 }'
+        )
+
+        entries = extract_constants_deterministic(rule)
+
+        assert [
+            entry.model_dump(include={"value", "offset", "size", "is_nested"})
+            for entry in entries
+        ] == [
+            {"value": "0x5A4D", "offset": 0, "size": 2, "is_nested": False},
+            {"value": "0x00004550", "offset": 0x3C, "size": 4, "is_nested": True},
+        ]
+
+    def test_nested_relative_offset_is_extracted(self):
+        rule = 'rule Sample { condition: uint16(uint32(0x3c) + 0x18) == 0x10b }'
+        entry = extract_constants_deterministic(rule)[0]
+
+        assert entry.is_nested is True
+        assert entry.relative_offset == 0x18
+
+    def test_nested_greater_than_materializes_a_witness(self):
+        rule = 'rule Sample { condition: uint32(uint32(0x3c) + 232) > 0 }'
+        entry = extract_constants_deterministic(rule)[0]
+
+        assert entry.value == "0x00000001"
+        assert entry.relative_offset == 232
+
+    def test_nested_relative_pe_constant_is_patched(self, tmp_path):
+        binary = tmp_path / "sample.exe"
+        data = bytearray(0x200)
+        data[0x3C:0x40] = (0x80).to_bytes(4, "little")
+        binary.write_bytes(data)
+        constants = [
+            YaraConstantEntry(
+                value="0x00000001",
+                offset=0x3C,
+                size=4,
+                is_nested=True,
+                relative_offset=0xE8,
+            )
+        ]
+
+        _patch_pe_constants(binary, constants, data_start=None)
+
+        assert binary.read_bytes()[0x168:0x16C] == b"\x01\x00\x00\x00"
+
+    def test_big_endian_and_signed_integer_functions(self):
+        rule = (
+            'rule Sample { condition: uint32be(0) == 0x89504e47 and '
+            'int16(4) == 0x4b50 }'
+        )
+        entries = extract_constants_deterministic(rule)
+
+        assert entries[0].byte_order == "big"
+        assert entries[0].size == 4
+        assert entries[1].signed is True
+
+    def test_out_of_range_equality_is_unsatisfiable(self):
+        rule = 'rule Sample { condition: uint16(0) == 0x10000 }'
+        with pytest.raises(UnsatisfiableExtractionError, match="does not fit"):
+            extract_constants_deterministic(rule)
+
+    def test_nodes_skip_llm_for_supported_rule(self):
+        rule = 'rule Sample { strings: $a = "hello" condition: $a }'
+        state = {"normalized_rule": rule, "has_condition": False}
+        llm = MagicMock()
+
+        strings = extract_strings(state, llm=llm)
+        constants = extract_constants({**state, **strings}, llm=llm)
+
+        assert strings["rule_strings"][0].value == "hello"
+        assert strings["strings_extraction_source"] == "deterministic"
+        assert constants["rule_constants"] == []
+        assert constants["constants_extraction_source"] == "deterministic"
+        llm.with_structured_output.assert_not_called()
+        llm.invoke.assert_not_called()
+
+
+class TestCapabilityPreflight:
+    def test_supported_rule_is_constructible(self):
+        result = assess_capability(
+            'rule Sample { strings: $a = "ok" condition: $a }'
+        )
+        assert result.disposition == "constructible"
+
+    def test_pe_module_condition_is_unsupported(self):
+        result = assess_capability('import "pe" rule Sample { condition: pe.is_pe }')
+        assert result.disposition == "unsupported"
+        assert result.code == "unsupported_pe_module"
+
+    def test_whole_file_hash_is_infeasible(self):
+        result = assess_capability(
+            'import "hash" rule Sample { condition: '
+            'hash.md5(0, filesize) == "d41d8cd98f00b204e9800998ecf8427e" }'
+        )
+        assert result.disposition == "infeasible"
+
+    def test_out_of_range_integer_is_unsatisfiable(self):
+        result = assess_capability(
+            'rule Sample { condition: uint16(0) == 0x10000 }'
+        )
+        assert result.disposition == "unsatisfiable"
+
+    def test_missing_pe32_compiler_is_reported(self):
+        rule = (
+            'rule Sample { condition: uint16(0) == 0x5a4d and '
+            'uint16(uint32(0x3c) + 0x18) == 0x010b }'
+        )
+        with patch("aray.capabilities.shutil.which", return_value=None):
+            result = assess_capability(rule)
+        assert result.disposition == "construction_failed"
+        assert result.code == "missing_pe32_compiler"
 
 
 # ---------------------------------------------------------------------------
@@ -158,6 +389,19 @@ class TestFormatAsciiInitializer:
 
     def test_string_with_double_quote(self):
         assert _format_ascii_initializer('say "hi"') == '{"say \\"hi\\""}'
+
+    def test_utf8_text_is_preserved_as_bytes(self):
+        from aray.codegen import _ascii_str_to_bytes
+
+        assert _ascii_str_to_bytes("failed…") == "failed…".encode("utf-8")
+
+    def test_pe_offset_source_emits_wide_as_bytes(self):
+        source = generate_pe_offset_c_source(
+            b"probe", [YaraStringEntry(value="wide", format="widechar")]
+        )
+
+        assert "wchar_t" not in source
+        assert "0x77, 0x00, 0x69, 0x00" in source
 
 
 # ---------------------------------------------------------------------------
@@ -469,8 +713,8 @@ class TestCompileBinary:
         compile_binary(state)
 
         src, linker = self._read_generated()
-        assert ".sec_0x3000" in src
-        assert "0x3000" in linker
+        assert ".sec_0x200" in src
+        assert "0x200" in linker
         assert "_start" in src
         self._gcc_mock.assert_called_once()
 
@@ -484,8 +728,8 @@ class TestCompileBinary:
         compile_binary(state)
 
         src, linker = self._read_generated()
-        assert ".sec_0x3000" in src
-        assert ".sec_0x3100" in src
+        assert ".sec_0x200" in src
+        assert ".sec_0x20a" in src
 
     def test_rule2_ascii_with_offset(self):
         """rule2: $a at 0x600 and $b at default offset."""
@@ -1058,10 +1302,10 @@ class TestJudgeRouter:
         assert self._router("failed", 3) == "fail_normalization"
 
     def test_routes_to_extract_on_passed(self):
-        assert self._router("passed", 1) == "extract_strings"
+        assert self._router("passed", 1) == "assess_constructibility"
 
     def test_routes_to_extract_on_uncertain(self):
-        assert self._router("uncertain", 1) == "extract_strings"
+        assert self._router("uncertain", 1) == "assess_constructibility"
 
 
 # ---------------------------------------------------------------------------
@@ -1582,20 +1826,37 @@ class TestNoStructuredOutput:
             "has_condition": False,
         }
 
+    def _string_fallback_state(self) -> ArayGraphState:
+        state = self._rule0_state()
+        state["normalized_rule"] = (
+            'import "pe"\nrule fallback { strings: $a = "x" '
+            'condition: $a at pe.entry_point }'
+        )
+        return state
+
+    def _constant_fallback_state(self) -> ArayGraphState:
+        state = self._rule0_state()
+        state["normalized_rule"] = (
+            'rule fallback { condition: '
+            'uint16(uint32(0x3c) - 0x18) == 0x010b }'
+        )
+        return state
+
     def test_extract_strings_unstructured(self):
         """Plain JSON response is parsed into YaraStringEntry objects."""
         json_resp = '{"strings": [{"value": "hello", "offset": null, "format": "ascii"}]}'
         mock_llm = _mock_llm_unstructured(json_resp)
-        result = extract_strings(self._rule0_state(), llm=mock_llm, use_structured=False)
+        result = extract_strings(self._string_fallback_state(), llm=mock_llm, use_structured=False)
         assert len(result["rule_strings"]) == 1
         assert result["rule_strings"][0].value == "hello"
+        assert result["strings_extraction_source"] == "llm_fallback"
         assert result["has_condition"] is False
 
     def test_extract_strings_strips_markdown_fence(self):
         """Markdown code fences around JSON are stripped before parsing."""
         json_resp = '```json\n{"strings": [{"value": "world", "offset": null, "format": "ascii"}]}\n```'
         mock_llm = _mock_llm_unstructured(json_resp)
-        result = extract_strings(self._rule0_state(), llm=mock_llm, use_structured=False)
+        result = extract_strings(self._string_fallback_state(), llm=mock_llm, use_structured=False)
         assert result["rule_strings"][0].value == "world"
 
     def test_normalize_rule_unstructured(self):
@@ -1611,15 +1872,16 @@ class TestNoStructuredOutput:
             '{"constants": [{"value": "0x5A4D", "offset": 0, "size": 2, "is_nested": false}]}'
         )
         mock_llm = _mock_llm_unstructured(json_resp)
-        result = extract_constants(self._rule0_state(), llm=mock_llm, use_structured=False)
+        result = extract_constants(self._constant_fallback_state(), llm=mock_llm, use_structured=False)
         assert len(result["rule_constants"]) == 1
         assert result["rule_constants"][0].value == "0x5A4D"
+        assert result["constants_extraction_source"] == "llm_fallback"
 
     def test_unstructured_calls_invoke_not_with_structured_output(self):
         """use_structured=False must call llm.invoke(), never llm.with_structured_output()."""
         json_resp = '{"strings": []}'
         mock_llm = _mock_llm_unstructured(json_resp)
-        extract_strings(self._rule0_state(), llm=mock_llm, use_structured=False)
+        extract_strings(self._string_fallback_state(), llm=mock_llm, use_structured=False)
         mock_llm.invoke.assert_called_once()
         mock_llm.with_structured_output.assert_not_called()
 
@@ -2031,11 +2293,12 @@ class TestWriteGenericArtifact:
         buf, _ = write_generic_artifact([], constants)
         assert buf[0:2] == b"\x3c\x25"
 
-    def test_nested_constant_skipped(self):
-        """Nested constants (PE path only) must not be patched into generic artifacts."""
+    def test_nested_constant_materialized(self):
+        """Generic artifacts materialize pointer targets for nested constants."""
         constants = [{"value": "0x4550", "offset": 0x3C, "size": 4, "is_nested": True}]
         buf, _ = write_generic_artifact([], constants)
-        assert buf[0x3C:0x40] == b"\x00\x00\x00\x00"
+        assert buf[0x3C:0x40] == b"\x00\x01\x00\x00"
+        assert buf[0x100:0x104] == b"\x50\x45\x00\x00"
 
     def test_min_buffer_size_0x200(self):
         buf, _ = write_generic_artifact([], [])

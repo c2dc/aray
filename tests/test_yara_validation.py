@@ -73,7 +73,9 @@ condition:
 
 def test_cve_2018_20250_candidate_is_valid():
     original = Path("evaluation/yara-repos/rules/cve_rules/CVE-2018-20250.yar").read_text()
-    normalized = Path("evaluation/normalized-gpt-4.1/cve_rules/CVE-2018-20250.yar").read_text()
+    normalized = Path(
+        "evaluation/normalized-glm-5.2-stable/cve_rules/CVE-2018-20250.yar"
+    ).read_text()
     assert validate_normalization(original, normalized) is None
     assert normalization_is_proven(original, normalized) is True
 
@@ -90,10 +92,9 @@ def test_bleedinglife_17_of_18_candidate_is_valid():
         "evaluation/yara-repos/rules/exploit_kits/EK_BleedingLife.yar"
     ).read_text()
     normalized = Path(
-        "evaluation/normalized-gpt-4.1/exploit_kits/EK_BleedingLife.yar"
+        "evaluation/normalized-glm-5.2-stable/exploit_kits/EK_BleedingLife.yar"
     ).read_text()
-    # yara-python rejects an unreferenced declaration, so retain the selected 17.
-    normalized = normalized.replace('   $string17 = "Scene 1"\n', "")
+    # The frozen candidate retains exactly the selected 17 declarations.
     assert validate_normalization(original, normalized) is None
     assert normalization_is_proven(original, normalized) is True
 
@@ -419,7 +420,7 @@ condition:
 def test_second_glm_round_anonymous_failures_are_canonicalized(rule_name):
     report = json.loads(
         Path(
-            "evaluation/reports/2026-08-07T21-26-04-glm-5.2-2round/"
+            "evaluation/reports/2026-08-12T19-30-54-glm-5.2/"
             "norm_report.json"
         ).read_text()
     )

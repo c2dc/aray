@@ -1,13 +1,8 @@
 """End-to-end pipeline tests.
 
-TestE2ELinux / TestE2EPE  [@pytest.mark.llm]:
-    Real LLM calls — validate prompts, structured-output parsing, and the
-    full compile → YARA-scan round-trip.  Require a valid OPENAI_API_KEY in
-    .env.  Run with:  pytest -m llm
-
-TestE2EPipelineConfig:
-    No LLM calls.  Verify that build_graph() wires ChatOpenAI correctly for
-    each per-role model / base_url setting.
+Supported fixed rules exercise deterministic extraction without model calls.
+Only normalization scenarios carry the ``llm`` marker and require credentials.
+Pipeline configuration tests mock the model boundary.
 """
 
 import os
@@ -85,14 +80,15 @@ def _invoke(
     use_structured_output: bool = True,
     scan_only: bool = False,
 ) -> tuple[Path, Path]:
-    """Run the full pipeline with real LLM calls; redirect build output to tmp_path."""
+    """Run the full pipeline, calling a model only when required by the rule."""
     default_model = os.getenv("OPENAI_MODEL") or "gpt-4.1"
     base_url = os.getenv("OPENAI_BASE_URL") or None
+    api_key = os.getenv("OPENAI_API_KEY") or "not-needed"
     normalize_model = os.getenv("NORMALIZE_MODEL") or default_model
     extract_model = os.getenv("EXTRACT_MODEL") or default_model
     config = PipelineConfig(
-        normalize=LLMNodeConfig(model=normalize_model, base_url=base_url),
-        extract=LLMNodeConfig(model=extract_model, base_url=base_url),
+        normalize=LLMNodeConfig(model=normalize_model, base_url=base_url, api_key=api_key),
+        extract=LLMNodeConfig(model=extract_model, base_url=base_url, api_key=api_key),
         use_structured_output=use_structured_output,
         scan_only=scan_only,
     )
@@ -110,17 +106,15 @@ def _invoke(
 
 
 # ---------------------------------------------------------------------------
-# E2E — Linux ELF rules (real LLM)
+# E2E — Linux ELF rules with deterministic extraction
 # ---------------------------------------------------------------------------
 
-@pytest.mark.llm
-@requires_api_key
 @requires_yara_and_gcc
-class TestE2ELinux:
-    """Full pipeline with real LLM calls → ELF binary → YARA scan."""
+class TestE2ELinuxDeterministic:
+    """Deterministic extraction → ELF binary → YARA scan."""
 
     def test_rule0_matches(self, tmp_path):
-        """rule0: single ASCII string — LLM extracts it, ELF matches the rule."""
+        """rule0: deterministic extraction finds one ASCII string."""
         rule = RULES_DIR / "rule0.yar"
         linux_dir, _ = _invoke(rule, tmp_path)
         assert (linux_dir / "app").exists(), "ELF binary not created"
@@ -137,12 +131,26 @@ class TestE2ELinux:
         assert BANNER in result.stdout
 
     def test_rule1_matches(self, tmp_path):
-        """rule1: two ASCII strings — LLM extracts both, ELF matches the rule."""
+        """rule1: deterministic extraction finds both ASCII strings."""
         rule = RULES_DIR / "rule1.yar"
         linux_dir, _ = _invoke(rule, tmp_path)
         result = _yara_scan(rule, linux_dir / "app")
         assert result.returncode == 0
         assert "rule1" in result.stdout
+
+    def test_linux_build_artefacts_created(self, tmp_path):
+        """Pipeline writes all expected build artefacts for a Linux rule."""
+        rule = RULES_DIR / "rule0.yar"
+        linux_dir, _ = _invoke(rule, tmp_path)
+        for name in ("main.S", "linker.ld", "normalized_rule.yar", "app"):
+            assert (linux_dir / name).exists(), f"{name} missing from Linux build dir"
+
+
+@pytest.mark.llm
+@requires_api_key
+@requires_yara_and_gcc
+class TestE2ELinuxNormalization:
+    """Rules that require real normalization calls before deterministic extraction."""
 
     def test_rule10_prefers_cheaper_or_branch(self, tmp_path):
         """rule10: normalization avoids the tight-size PE branch."""
@@ -173,26 +181,17 @@ class TestE2ELinux:
         assert result.returncode == 0
         assert "CVE_2012_0158_KeyBoy" in result.stdout
 
-    def test_linux_build_artefacts_created(self, tmp_path):
-        """Pipeline writes all expected build artefacts for a Linux rule."""
-        rule = RULES_DIR / "rule0.yar"
-        linux_dir, _ = _invoke(rule, tmp_path)
-        for name in ("main.S", "linker.ld", "normalized_rule.yar", "app"):
-            assert (linux_dir / name).exists(), f"{name} missing from Linux build dir"
-
 
 # ---------------------------------------------------------------------------
-# E2E — Windows PE rules (real LLM)
+# E2E — Windows PE rules with deterministic extraction
 # ---------------------------------------------------------------------------
 
-@pytest.mark.llm
-@requires_api_key
 @requires_mingw_and_yara
 class TestE2EPE:
-    """Full pipeline with real LLM calls → PE binary → YARA scan."""
+    """Deterministic extraction → PE binary → YARA scan."""
 
     def test_rule6_matches(self, tmp_path):
-        """rule6: MZ + PE sig + mutex — LLM extracts them, PE matches the rule."""
+        """rule6: deterministic extraction finds MZ, PE signature, and mutex."""
         rule = RULES_DIR / "rule6.yar"
         _, win_dir = _invoke(rule, tmp_path)
         assert (win_dir / "app.exe").exists(), "PE binary not created"
@@ -201,7 +200,7 @@ class TestE2EPE:
         assert "maindll_mutex" in result.stdout
 
     def test_rule9_wide_strings_match(self, tmp_path):
-        """rule9: ASCII + widechar strings — LLM extracts them, PE matches the rule."""
+        """rule9: deterministic extraction finds ASCII and wide strings."""
         rule = RULES_DIR / "rule9.yar"
         _, win_dir = _invoke(rule, tmp_path)
         result = _yara_scan(rule, win_dir / "app.exe")
@@ -306,6 +305,17 @@ class TestE2EPipelineConfig:
         calls = self._capture_openai_calls(config)
         assert any(c.get("api_key") == "secret-key" for c in calls)
 
+    def test_reasoning_effort_forwarded_per_role(self):
+        config = PipelineConfig(
+            normalize=LLMNodeConfig(model="m1", reasoning_effort="high"),
+            extract=LLMNodeConfig(model="m2", reasoning_effort="none"),
+        )
+
+        calls = self._capture_openai_calls(config)
+
+        assert calls[0]["reasoning_effort"] == "high"
+        assert calls[1]["reasoning_effort"] == "none"
+
 
 # ---------------------------------------------------------------------------
 # E2E — PipelineConfig.use_structured_output wiring (mocked)
@@ -326,6 +336,7 @@ class TestPipelineConfigUnstructured:
     def test_no_structured_output_flag_propagates(self):
         """Nodes call _invoke_llm with use_structured=False when the config flag is set."""
         from aray.models import NormalizedYaraRule, YaraConstants, YaraStrings
+        from aray.yara_extraction import UnsupportedExtractionError
 
         config = PipelineConfig(use_structured_output=False)
         invoke_llm_calls: list[bool] = []
@@ -347,6 +358,14 @@ class TestPipelineConfigUnstructured:
         with (
             patch("aray.graph.ChatOpenAI", return_value=MagicMock()),
             patch("aray.nodes._invoke_llm", side_effect=spy_invoke_llm),
+            patch(
+                "aray.yara_extraction.extract_strings_deterministic",
+                side_effect=UnsupportedExtractionError("test fallback"),
+            ),
+            patch(
+                "aray.yara_extraction.extract_constants_deterministic",
+                side_effect=UnsupportedExtractionError("test fallback"),
+            ),
             patch("aray.graph.read_yara_rule", return_value={"yara_rule": _needs_norm_rule}),
             patch("aray.graph.compile_binary", return_value={}),
         ):
@@ -359,24 +378,16 @@ class TestPipelineConfigUnstructured:
 
 
 # ---------------------------------------------------------------------------
-# E2E — forced prompt-based JSON path (real LLM)
+# E2E — structured output disabled on a deterministic path
 # ---------------------------------------------------------------------------
 
-@pytest.mark.llm
 @pytest.mark.no_structured_output
-@requires_api_key
 @requires_yara_and_gcc
 class TestE2ELinuxNoStructuredOutput:
-    """Full pipeline with use_structured_output=False → ELF binary → YARA scan.
-
-    Exercises the prompt-based JSON fallback path directly (the mode the
-    pipeline selects automatically when structured output is unavailable).
-    Enable with:  pytest -m no_structured_output
-                  pytest -m llm          (included in the broader llm suite)
-    """
+    """Disabling structured output does not affect deterministic extraction."""
 
     def test_rule0_matches(self, tmp_path):
-        """rule0: JSON-fallback LLM path extracts the string; ELF matches the rule."""
+        """rule0 remains deterministic with structured output disabled."""
         rule = RULES_DIR / "rule0.yar"
         linux_dir, _ = _invoke(rule, tmp_path, use_structured_output=False)
         assert (linux_dir / "app").exists(), "ELF binary not created"
@@ -385,7 +396,7 @@ class TestE2ELinuxNoStructuredOutput:
         assert "rule0" in result.stdout
 
     def test_rule1_matches(self, tmp_path):
-        """rule1: JSON-fallback extracts both strings; ELF matches the rule."""
+        """rule1 remains deterministic with structured output disabled."""
         rule = RULES_DIR / "rule1.yar"
         linux_dir, _ = _invoke(rule, tmp_path, use_structured_output=False)
         result = _yara_scan(rule, linux_dir / "app")
@@ -401,14 +412,12 @@ class TestE2ELinuxNoStructuredOutput:
 
 
 # ---------------------------------------------------------------------------
-# E2E — Linux ELF rules with --scan-only (real LLM, no gcc needed)
+# E2E — Linux ELF rules with --scan-only and deterministic extraction
 # ---------------------------------------------------------------------------
 
-@pytest.mark.llm
-@requires_api_key
 @requires_yara
 class TestE2ELinuxScanOnly:
-    """Full LLM pipeline with scan_only=True → raw ELF artifact → YARA scan."""
+    """Deterministic pipeline with scan_only=True → raw ELF → YARA scan."""
 
     def test_rule0_scan_only_matches(self, tmp_path):
         """rule0: scan-only path writes raw ELF; YARA still matches."""
@@ -452,14 +461,12 @@ class TestE2ELinuxScanOnly:
 
 
 # ---------------------------------------------------------------------------
-# E2E — Windows PE rules with --scan-only (real LLM, no MinGW needed)
+# E2E — Windows PE rules with --scan-only and deterministic extraction
 # ---------------------------------------------------------------------------
 
-@pytest.mark.llm
-@requires_api_key
 @requires_yara
 class TestE2EPEScanOnly:
-    """Full LLM pipeline with scan_only=True → raw PE64 artifact → YARA scan."""
+    """Deterministic pipeline with scan_only=True → raw PE64 → YARA scan."""
 
     def test_rule6_scan_only_matches(self, tmp_path):
         """rule6: scan-only path writes raw PE64; YARA still matches."""

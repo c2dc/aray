@@ -12,6 +12,7 @@ import sys
 import tempfile
 import threading
 import tomllib
+from collections import Counter
 from concurrent.futures import ThreadPoolExecutor
 from dataclasses import asdict, dataclass, field
 from datetime import datetime
@@ -46,6 +47,12 @@ class EvalResult:
     extract_model: str = ""
     normalize_verdict: str | None = None   # last judge verdict ("passed"/"failed"/"uncertain")
     normalize_reason: str | None = None    # last judge explanation
+    disposition: str | None = None
+    failure_category: str | None = None
+    normalization_source: str = "not_reached"
+    strings_extraction_source: str = "not_reached"
+    constants_extraction_source: str = "not_reached"
+    llm_used: bool = False
 
     def to_dict(self) -> dict:
         return asdict(self)
@@ -62,6 +69,8 @@ class EvalConfig:
     extract_base_url: str | None = None
     normalize_api_key: str | None = None
     extract_api_key: str | None = None
+    normalize_reasoning_effort: str | None = None
+    extract_reasoning_effort: str | None = None
     use_structured_output: bool = True
     normalize_streaming: bool | None = None
     extract_streaming: bool | None = None
@@ -146,6 +155,28 @@ def _has_yara_match(stdout: str) -> bool:
 _RUN_LOCK = threading.Lock()
 
 
+def _execution_provenance(final_state: dict | None) -> dict:
+    """Return model-use provenance recorded by the completed graph path."""
+    state = final_state or {}
+    if "needs_normalization" not in state:
+        normalization_source = "not_reached"
+    elif state["needs_normalization"]:
+        normalization_source = "llm"
+    else:
+        normalization_source = "not_needed"
+
+    strings_source = state.get("strings_extraction_source", "not_reached")
+    constants_source = state.get("constants_extraction_source", "not_reached")
+    return {
+        "normalization_source": normalization_source,
+        "strings_extraction_source": strings_source,
+        "constants_extraction_source": constants_source,
+        "llm_used": normalization_source == "llm"
+        or strings_source == "llm_fallback"
+        or constants_source == "llm_fallback",
+    }
+
+
 def _run_one(rule_path: Path, eval_cfg: EvalConfig) -> EvalResult:
     """Run the full aray pipeline on *rule_path* and return an EvalResult."""
     import time
@@ -214,10 +245,12 @@ def _run_one(rule_path: Path, eval_cfg: EvalConfig) -> EvalResult:
             normalize=LLMNodeConfig(
                 model=normalize_model, base_url=normalize_base_url, api_key=eval_cfg.normalize_api_key,
                 streaming=eval_cfg.normalize_streaming,
+                reasoning_effort=eval_cfg.normalize_reasoning_effort,
             ),
             extract=LLMNodeConfig(
                 model=extract_model, base_url=extract_base_url, api_key=eval_cfg.extract_api_key,
                 streaming=eval_cfg.extract_streaming,
+                reasoning_effort=eval_cfg.extract_reasoning_effort,
             ),
             use_structured_output=eval_cfg.use_structured_output,
             scan_only=eval_cfg.scan_only,
@@ -250,6 +283,30 @@ def _run_one(rule_path: Path, eval_cfg: EvalConfig) -> EvalResult:
                 extract_model=extract_model,
                 normalize_verdict="failed",
                 normalize_reason=normalization_error,
+                disposition="normalization_failed",
+                failure_category="normalization",
+                **_execution_provenance(final_state),
+            )
+
+        construction_error = (final_state or {}).get("construction_error")
+        if construction_error:
+            duration = time.monotonic() - t0
+            disposition = (final_state or {}).get("constructibility") or "construction_failed"
+            return EvalResult(
+                rule_path=str(rule_path),
+                rule_name=rule_name,
+                status="failed",
+                error=construction_error,
+                duration_seconds=round(duration, 3),
+                yara_stdout=None,
+                yara_returncode=None,
+                normalize_model=normalize_model,
+                extract_model=extract_model,
+                normalize_verdict=(final_state or {}).get("judge_verdict") or None,
+                normalize_reason=(final_state or {}).get("judge_reason") or None,
+                disposition=disposition,
+                failure_category=(final_state or {}).get("constructibility_code"),
+                **_execution_provenance(final_state),
             )
 
         # Detect the produced binary and always scan the selected standalone
@@ -292,6 +349,9 @@ def _run_one(rule_path: Path, eval_cfg: EvalConfig) -> EvalResult:
             extract_model=extract_model,
             normalize_verdict=(final_state or {}).get("judge_verdict") or None,
             normalize_reason=(final_state or {}).get("judge_reason") or None,
+            disposition="matched" if passed else "unexplained_mismatch",
+            failure_category=None if passed else "yara_mismatch",
+            **_execution_provenance(final_state),
         )
 
     except Exception as exc:  # noqa: BLE001
@@ -306,6 +366,9 @@ def _run_one(rule_path: Path, eval_cfg: EvalConfig) -> EvalResult:
             yara_returncode=None,
             normalize_model=normalize_model,
             extract_model=extract_model,
+            disposition="construction_failed",
+            failure_category="pipeline_exception",
+            **_execution_provenance(final_state),
         )
     finally:
         if not eval_cfg.keep_artifacts:
@@ -373,12 +436,33 @@ def _write_report(results: list[EvalResult], eval_cfg: EvalConfig, run_ts: str) 
                 "base_url": eval_cfg.base_url,
                 "normalize_base_url": eval_cfg.normalize_base_url,
                 "extract_base_url": eval_cfg.extract_base_url,
+                "normalize_reasoning_effort": eval_cfg.normalize_reasoning_effort,
+                "extract_reasoning_effort": eval_cfg.extract_reasoning_effort,
                 "use_structured_output": eval_cfg.use_structured_output,
                 "scan_only": eval_cfg.scan_only,
                 "workers": eval_cfg.workers,
             },
         },
         "results": [r.to_dict() for r in results],
+        "summary": {
+            "disposition_counts": dict(Counter(r.disposition or "unknown" for r in results)),
+            "failure_categories": dict(
+                Counter(r.failure_category for r in results if r.failure_category)
+            ),
+            "processing_paths": {
+                "normalization": dict(Counter(r.normalization_source for r in results)),
+                "strings_extraction": dict(
+                    Counter(r.strings_extraction_source for r in results)
+                ),
+                "constants_extraction": dict(
+                    Counter(r.constants_extraction_source for r in results)
+                ),
+            },
+            "llm_usage": {
+                "rules_using_llm": sum(r.llm_used for r in results),
+                "rules_without_llm": sum(not r.llm_used for r in results),
+            },
+        },
     }
 
     out = (
@@ -506,6 +590,24 @@ def _build_eval_config(args: argparse.Namespace, file_cfg: dict) -> EvalConfig:
         or os.getenv("EXTRACT_API_KEY")
         or shared_api_key
     )
+    normalize_reasoning_effort: str | None = (
+        args.normalize_reasoning_effort
+        or args.reasoning_effort
+        or ev.get("normalize_reasoning_effort")
+        or ev.get("reasoning_effort")
+        or os.getenv("NORMALIZE_REASONING_EFFORT")
+        or os.getenv("OPENAI_REASONING_EFFORT")
+        or None
+    )
+    extract_reasoning_effort: str | None = (
+        args.extract_reasoning_effort
+        or args.reasoning_effort
+        or ev.get("extract_reasoning_effort")
+        or ev.get("reasoning_effort")
+        or os.getenv("EXTRACT_REASONING_EFFORT")
+        or os.getenv("OPENAI_REASONING_EFFORT")
+        or None
+    )
 
     # Boolean / integer flags: CLI > config file > default
     scan_only = args.scan_only or ev.get("scan_only", False)
@@ -534,6 +636,8 @@ def _build_eval_config(args: argparse.Namespace, file_cfg: dict) -> EvalConfig:
         extract_base_url=extract_base_url,
         normalize_api_key=normalize_api_key,
         extract_api_key=extract_api_key,
+        normalize_reasoning_effort=normalize_reasoning_effort,
+        extract_reasoning_effort=extract_reasoning_effort,
         use_structured_output=True,
         normalize_streaming=normalize_streaming,
         extract_streaming=extract_streaming,
@@ -632,6 +736,24 @@ def parse_args(argv: list[str] | None = None) -> argparse.Namespace:
         default=None,
         metavar="KEY",
         help="API key for the extract nodes. Overrides EXTRACT_API_KEY env var and OPENAI_API_KEY.",
+    )
+    parser.add_argument(
+        "--reasoning-effort",
+        choices=("none", "low", "medium", "high", "max"),
+        default=None,
+        help="Reasoning effort for all LLM roles when supported by the provider.",
+    )
+    parser.add_argument(
+        "--normalize-reasoning-effort",
+        choices=("none", "low", "medium", "high", "max"),
+        default=None,
+        help="Reasoning effort for the normalize/judge nodes.",
+    )
+    parser.add_argument(
+        "--extract-reasoning-effort",
+        choices=("none", "low", "medium", "high", "max"),
+        default=None,
+        help="Reasoning effort for the extract nodes.",
     )
     parser.add_argument(
         "--scan-only",

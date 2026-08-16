@@ -71,8 +71,8 @@ def _hex_str_to_bytes(value: str) -> bytes:
 
 
 def _ascii_str_to_bytes(value: str) -> bytes:
-    """Encode an ASCII string to bytes."""
-    return value.encode("ascii")
+    """Encode a YARA text string to its source UTF-8 bytes."""
+    return value.encode("utf-8")
 
 
 def _wide_str_to_bytes(value: str) -> bytes:
@@ -90,11 +90,16 @@ def _int_to_le_bytes(value: int, size: int) -> bytes:
     return value.to_bytes(size, byteorder="little")
 
 
+def _constant_bytes(value: int, size: int, byte_order: str = "little") -> bytes:
+    return value.to_bytes(size, byteorder=byte_order)
+
+
 def _assign_offsets(
     strings: list[YaraStringEntry],
     default_base: int = DEFAULT_OFFSET_BASE,
     step: int = DEFAULT_OFFSET_STEP,
     pack: bool = False,
+    reserved_sections: list[tuple[int, bytes]] | None = None,
 ) -> list[tuple[int, bytes]]:
     """Return (offset, raw-bytes) pairs for every string.
 
@@ -106,9 +111,10 @@ def _assign_offsets(
     rather than at fixed *step* intervals.  Use this for generic artifacts
     where tight filesize constraints must be satisfied.
     """
-    sections: list[tuple[int, bytes]] = []
-    next_default = default_base
-
+    requests: list[
+        tuple[int, int, bytes, int | None, int | None, int | None, int]
+    ] = []
+    order = 0
     for entry in strings:
         if entry.format == "hex":
             data = _hex_str_to_bytes(entry.value)
@@ -116,14 +122,66 @@ def _assign_offsets(
             data = _wide_str_to_bytes(entry.value)
         else:
             data = _ascii_str_to_bytes(entry.value)
+        boundary = (2 if entry.format == "widechar" else 1) if entry.fullword else 0
+        for occurrence in range(entry.match_count):
+            exact = entry.offset if occurrence == 0 else None
+            priority = 0 if exact is not None else (1 if entry.range_start is not None else 2)
+            requests.append(
+                (
+                    priority,
+                    order,
+                    data,
+                    exact,
+                    entry.range_start,
+                    entry.range_end,
+                    boundary,
+                )
+            )
+            order += 1
 
-        if entry.offset is not None:
-            sections.append((entry.offset, data))
+    sections: list[tuple[int, bytes]] = list(reserved_sections or [])
+    ordered_sections: list[tuple[int, int, bytes]] = []
+    next_default = default_base
+
+    def available(offset: int, data: bytes, boundary: int) -> bool:
+        start = max(0, offset - boundary)
+        end = offset + len(data) + boundary
+        return all(end <= placed or start >= placed + len(blob) for placed, blob in sections)
+
+    for (
+        _priority,
+        request_order,
+        data,
+        exact,
+        range_start,
+        range_end,
+        boundary,
+    ) in sorted(requests):
+        if exact is not None:
+            if not available(exact, data, boundary):
+                raise ValueError(f"string placement at offset 0x{exact:x} overlaps another string")
+            offset = exact
+        elif range_start is not None:
+            offset = range_start
+            while offset <= range_end and not available(offset, data, boundary):
+                offset += 1
+            if offset > range_end:
+                raise ValueError(
+                    f"no non-overlapping placement available in range "
+                    f"0x{range_start:x}..0x{range_end:x}"
+                )
         else:
-            sections.append((next_default, data))
-            next_default += (len(data) + 1) if pack else step
+            offset = next_default
+            payload_size = len(data) + boundary
+            increment = (payload_size + 1) if pack else step
+            while not available(offset, data, boundary):
+                offset += increment
+            next_default = offset + increment
+        payload = data + (b"\x00" * boundary)
+        sections.append((offset, payload))
+        ordered_sections.append((request_order, offset, payload))
 
-    return sections
+    return [(offset, data) for _order, offset, data in sorted(ordered_sections)]
 
 
 def _constants_to_sections(
@@ -148,11 +206,15 @@ def _constants_to_sections(
             value = entry.get("value")
             size = entry.get("size", 4)
             is_nested = entry.get("is_nested", False)
+            byte_order = entry.get("byte_order", "little")
+            relative_offset = entry.get("relative_offset", 0)
         else:
             offset = entry.offset
             value = entry.value
             size = entry.size
             is_nested = entry.is_nested
+            byte_order = entry.byte_order
+            relative_offset = entry.relative_offset
 
         if offset is None:
             continue
@@ -162,10 +224,15 @@ def _constants_to_sections(
 
         if is_nested:
             sections.append((offset, _int_to_le_bytes(current_intermediate, 4)))
-            sections.append((current_intermediate, _int_to_le_bytes(value, size)))
-            current_intermediate += 0x10
+            sections.append(
+                (
+                    current_intermediate + relative_offset,
+                    _constant_bytes(value, size, byte_order),
+                )
+            )
+            current_intermediate += max(0x10, relative_offset + size + 1)
         else:
-            sections.append((offset, _int_to_le_bytes(value, size)))
+            sections.append((offset, _constant_bytes(value, size, byte_order)))
 
     return sections
 
@@ -329,19 +396,12 @@ def _generate_pe_free_globals(free_strings: list) -> list[str]:
     """
     lines: list[str] = []
     for i, entry in enumerate(free_strings):
-        value = _entry_field(entry, "value", "")
-        fmt = _entry_field(entry, "format", "ascii")
-        if fmt == "widechar":
-            lines.append(
-                f'__attribute__((used)) const wchar_t *fws_{i} = '
-                f'L"{_escape_c_string(value)}";'
-            )
-        else:
-            data = _string_entry_bytes(entry)
-            lines.append(
-                f"__attribute__((used)) unsigned char fstr_{i}[] = "
-                f"{_c_byte_array(data)};"
-            )
+        data = _string_entry_bytes(entry)
+        terminator = b"\x00\x00" if _entry_field(entry, "format", "ascii") == "widechar" else b"\x00"
+        lines.append(
+            f"__attribute__((used)) unsigned char fstr_{i}[] = "
+            f"{_c_byte_array(terminator + data + terminator)};"
+        )
     return lines
 
 

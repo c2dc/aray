@@ -65,6 +65,24 @@ def parse_args(argv: list[str] | None = None) -> argparse.Namespace:
         help="API key for the extract_strings/extract_constants nodes. Overrides EXTRACT_API_KEY env var and OPENAI_API_KEY.",
     )
     parser.add_argument(
+        "--reasoning-effort",
+        choices=("none", "low", "medium", "high", "max"),
+        default=None,
+        help="Reasoning effort for all LLM roles when supported by the provider.",
+    )
+    parser.add_argument(
+        "--normalize-reasoning-effort",
+        choices=("none", "low", "medium", "high", "max"),
+        default=None,
+        help="Reasoning effort for the normalize/judge nodes.",
+    )
+    parser.add_argument(
+        "--extract-reasoning-effort",
+        choices=("none", "low", "medium", "high", "max"),
+        default=None,
+        help="Reasoning effort for the extract nodes.",
+    )
+    parser.add_argument(
         "--no-stream",
         action="store_true",
         default=False,
@@ -133,6 +151,17 @@ def main() -> None:
     extract_base_url = args.extract_base_url or os.getenv("EXTRACT_BASE_URL") or base_url
     normalize_api_key = args.normalize_api_key or os.getenv("NORMALIZE_API_KEY") or shared_api_key
     extract_api_key = args.extract_api_key or os.getenv("EXTRACT_API_KEY") or shared_api_key
+    reasoning_effort = args.reasoning_effort or os.getenv("OPENAI_REASONING_EFFORT") or None
+    normalize_reasoning_effort = (
+        args.normalize_reasoning_effort
+        or os.getenv("NORMALIZE_REASONING_EFFORT")
+        or reasoning_effort
+    )
+    extract_reasoning_effort = (
+        args.extract_reasoning_effort
+        or os.getenv("EXTRACT_REASONING_EFFORT")
+        or reasoning_effort
+    )
 
     # Per-role streaming overrides: None inherits the global default below;
     # False only when the role's own flag is set. Structured output is always
@@ -144,11 +173,11 @@ def main() -> None:
     config = PipelineConfig(
         normalize=LLMNodeConfig(
             model=normalize_model, base_url=normalize_base_url, api_key=normalize_api_key,
-            streaming=normalize_streaming,
+            streaming=normalize_streaming, reasoning_effort=normalize_reasoning_effort,
         ),
         extract=LLMNodeConfig(
             model=extract_model, base_url=extract_base_url, api_key=extract_api_key,
-            streaming=extract_streaming,
+            streaming=extract_streaming, reasoning_effort=extract_reasoning_effort,
         ),
         scan_only=args.scan_only,
         streaming=not args.no_stream,

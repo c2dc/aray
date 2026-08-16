@@ -21,21 +21,21 @@
 #]
 
 directories = [
-    "evaluation/rules/cve_rules",
-    "evaluation/rules/antidebug_antivm",
-    "evaluation/rules/crypto",
-    "evaluation/rules/email",
-    "evaluation/rules/malware",
-    "evaluation/rules/packers",
-    "evaluation/rules/exploit_kits",
-    "evaluation/rules/webshells",
+    "evaluation/normalized-glm-5.2-stable/cve_rules",
+    "evaluation/normalized-glm-5.2-stable/antidebug_antivm",
+    "evaluation/normalized-glm-5.2-stable/crypto",
+    "evaluation/normalized-glm-5.2-stable/email",
+    "evaluation/normalized-glm-5.2-stable/malware",
+    "evaluation/normalized-glm-5.2-stable/packers",
+    "evaluation/normalized-glm-5.2-stable/exploit_kits",
+    "evaluation/normalized-glm-5.2-stable/webshells",
 ]
 
 # Shared LLM settings for normalization and extraction. These override
 # OPENAI_MODEL and OPENAI_BASE_URL as well as the role-specific environment
 # variables when no role-specific TOML value is set.
-model = "glm-5.2:cloud"
-base_url = "http://localhost:11434/v1"
+#model = "glm-5.2:cloud"
+#base_url = "http://localhost:11434/v1"
 
 # Optional role-specific settings. They correspond to the main aray CLI roles
 # and override the shared TOML values above.
@@ -50,11 +50,16 @@ base_url = "http://localhost:11434/v1"
 # normalize_api_key = "sk-..."
 # extract_api_key = "not-needed"
 
+# Optional reasoning controls for providers that expose thinking models.
+# reasoning_effort = "none"
+# normalize_reasoning_effort = "none"
+extract_reasoning_effort = "none"
+
 # Disable streaming globally or for one role. Each role inherits the global
 # setting unless its matching no_stream key is true.
 # no_stream = false
 # normalize_no_stream = false
-# extract_no_stream = false
+extract_no_stream = true
 
 # Artifact and execution controls.
 # Run `aray-eval --config .evaluator` to use this input list without positional

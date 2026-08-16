@@ -10,7 +10,7 @@ hide:
   <div class="aray-hero__copy">
     <p class="aray-kicker">Detection engineering without live malware</p>
     <h1>Generate benign files that match YARA rules.</h1>
-    <p class="aray-lead">Aray interprets detection logic with an LLM, then uses deterministic engineering backends to construct inspectable Linux ELF, Windows PE, and format-specific artifacts.</p>
+    <p class="aray-lead">Aray parses supported detection logic deterministically, uses LLM assistance only when needed, and constructs inspectable Linux ELF, Windows PE, and format-specific artifacts with conventional engineering backends.</p>
     <a class="aray-recognition" href="https://blackhat.com/us-26/arsenal/schedule/#aray-benign-binary-synthesis-for-signature-validation-without-the-malware-52919" aria-label="Aray was selected for presentation at Black Hat USA 2026 Arsenal">
       <span>Black Hat USA 2026</span>
       <strong>Selected for Arsenal</strong>
@@ -41,7 +41,7 @@ Real-world rules evaluated
 
 <div class="aray-metric" markdown>
 
-<strong>97.1%</strong>
+<strong>97.6%</strong>
 
 Official full-compile match rate
 
@@ -49,9 +49,9 @@ Official full-compile match rate
 
 <div class="aray-metric" markdown>
 
-<strong>404</strong>
+<strong>406</strong>
 
-YARA matches in each official run
+YARA matches in the current baseline
 
 </div>
 
@@ -86,9 +86,9 @@ Use the artifacts to exercise:
 
 <div markdown>
 
-### The model interprets
+### Aray interprets
 
-Complex rules may be normalized and judged by an LLM. Deterministic canonicalization restores retained fixed values and derives linear hex witnesses before judging. Supported fixed strings, modifiers, placements, counts, and endian-aware integer checks are then extracted lexically into Pydantic models; model extraction cannot override these deterministic results.
+Complex rules may be normalized and judged by an LLM. Deterministic canonicalization restores retained fixed values, constructibility preflight rejects known terminal constraints, and supported strings, modifiers, placements, counts, and endian-aware integer checks are extracted directly into Pydantic models. Extraction uses a model only for syntax outside that subset.
 
 </div>
 
@@ -112,6 +112,7 @@ The batch evaluator invokes the real YARA CLI. A valid model response or a succe
 
 ```text
 read + select rule -> optional LLM normalize/judge
+                  -> deterministic constructibility preflight
                   -> deterministic fixed-evidence extraction
                   -> PE / ELF / generic construction
                   -> YARA verification
@@ -133,7 +134,7 @@ $ yara data/rules/rule0.yar build/linux/app
 rule0 build/linux/app
 ```
 
-Requirements are Linux, Python 3.12+, [`uv`](https://docs.astral.sh/uv/), the YARA CLI, and access to an OpenAI-compatible model. Aray also supports fully local model execution through Ollama.
+Requirements are Linux, Python 3.12+, [`uv`](https://docs.astral.sh/uv/), and the YARA CLI. Rules that require normalization or extraction fallback also need access to an OpenAI-compatible model; Aray supports fully local model execution through Ollama.
 
 [Configure models and providers](configuration.md){ .md-button .md-button--primary }
 [Browse focused examples](examples.md){ .md-button }
@@ -150,20 +151,18 @@ Generated sources and normalized rules remain available in the build directory f
 
 ## Published Evaluation
 
-Aray was evaluated against 416 public rules from the Yara-Rules community repository. End-to-end success means the generated artifact produced an actual match when scanned by the YARA CLI.
+Aray was validated against 416 public rules from the Yara-Rules community repository. End-to-end success means the generated artifact produced an actual match when scanned by the YARA CLI.
 
-The only official published results are two full-compile reports:
-
-| Provider/model configuration | Report | Matches | Success rate |
+| Corpus | Mode | Matches | Rules using an LLM |
 |---|---|---:|---:|
-| GPT-4.1 | `2026-08-14T09-32-09-gpt-4.1` | 404 / 416 | **97.1%** |
-| GLM-5.2 Cloud (`glm-5.2:cloud`) | `2026-08-14T13-07-22-eval-glm-5.2` | 404 / 416 | **97.1%** |
+| Yara-Rules, 416 normalized rules | Full compile, 1 worker | **406 / 416 (97.6%)** | **0** |
 
-Both runs used the same frozen `evaluation/normalized-glm-5.2-stable` corpus, and no rule entered the normalization-and-judge loop. They measure provider, pipeline, authoritative deterministic extraction, toolchain, backend, and YARA compatibility; they do not compare normalization quality.
+All 416 rules bypassed normalization. The 406 constructible rules used deterministic string and constant extraction, while seven unsupported `pe.*` rules, two infeasible whole-file hash preimages, and one unsatisfiable integer value stopped at capability preflight before extraction. There were zero unexplained mismatches and zero construction failures.
 
-Both schema 2.1 reports retain all 416 per-rule results. Each records the same 12 non-matches: ten deterministic preflight dispositions and two construction failures caused by a missing i686 MinGW compiler in the evaluation environment. The 97.1% rate is not adjusted for those environmental failures. Full-corpus evaluations with smaller models such as Phi and Qwen are planned but not yet published.
+The extraction role was configured in separate control runs as GLM-5.2, Qwen 3.5, Phi-4, and GPT-4.1, but none of those models was invoked. The result measures deterministic coverage, artifact construction, installed toolchains, and final YARA acceptance, not provider quality.
 
 [Review the methodology and collection breakdown](evaluation.md){ .md-button }
+[Download the validation summary](assets/yara-rules-416-deterministic.json){ .md-button }
 
 ## Research Team
 

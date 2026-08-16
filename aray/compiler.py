@@ -22,8 +22,10 @@ from aray.constants import (
     BUILD_DIR,
     BUILD_DIR_WIN,
     MINGW_GCC,
+    MINGW_GCC_32,
     PE_ALIGN,
     PE_IMAGE_BASE,
+    PE_IMAGE_BASE_32,
     PE_SENTINEL,
 )
 from aray.state import ArayGraphState
@@ -124,9 +126,17 @@ def _is_pe_rule(constants: list, strings: list) -> bool:
     for entry in constants:
         value = entry.get("value") if isinstance(entry, dict) else entry.value
         offset = entry.get("offset") if isinstance(entry, dict) else entry.offset
-        if value == "0x5A4D" and offset == 0:
+        size = entry.get("size", 4) if isinstance(entry, dict) else entry.size
+        byte_order = (
+            entry.get("byte_order", "little")
+            if isinstance(entry, dict)
+            else entry.byte_order
+        )
+        numeric = int(value, 16) if isinstance(value, str) else value
+        expected = numeric.to_bytes(size, byteorder=byte_order)
+        if expected == b"MZ" and offset == 0:
             return True
-        if value == "0x00004550" and offset == 0x3C:
+        if expected == b"PE\x00\x00" and offset == 0x3C:
             return True
 
     # if it has a wide string, it is a PE rule
@@ -161,11 +171,15 @@ def _patch_constants(binary_path: Path, constants: list) -> None:
                 value = entry.get("value")
                 size = entry.get("size", 4)
                 is_nested = entry.get("is_nested", False)
+                byte_order = entry.get("byte_order", "little")
+                relative_offset = entry.get("relative_offset", 0)
             else:
                 offset = entry.offset
                 value = entry.value
                 size = entry.size
                 is_nested = entry.is_nested
+                byte_order = entry.byte_order
+                relative_offset = entry.relative_offset
 
             if offset is None:
                 continue
@@ -173,13 +187,15 @@ def _patch_constants(binary_path: Path, constants: list) -> None:
             if isinstance(value, str):
                 value = int(value, 16) if value.startswith(("0x", "0X")) else int(value)
 
-            value_bytes = value.to_bytes(size, byteorder="little")
+            value_bytes = value.to_bytes(size, byteorder=byte_order)
 
             if is_nested:
                 target = file_end
                 f.seek(0, 2)
+                if relative_offset:
+                    f.write(b"\x00" * relative_offset)
                 f.write(value_bytes)
-                file_end += size
+                file_end += relative_offset + size
                 f.seek(offset)
                 f.write(target.to_bytes(4, byteorder="little"))
             else:
@@ -187,7 +203,7 @@ def _patch_constants(binary_path: Path, constants: list) -> None:
                 f.write(value_bytes)
 
 
-def _mingw_pe_offset_flags() -> list[str]:
+def _mingw_pe_offset_flags(image_base: int = PE_IMAGE_BASE) -> list[str]:
     """Linker flags for the low-alignment, runnable, offset-aware PE.
 
     ``FileAlignment == SectionAlignment`` (< 0x1000) makes the loader map the
@@ -199,13 +215,10 @@ def _mingw_pe_offset_flags() -> list[str]:
         "-nostdlib",
         "-lkernel32",
         "-e", "_start",
-        f"-Wl,--image-base,{hex(PE_IMAGE_BASE)}",
+        f"-Wl,--image-base,{hex(image_base)}",
         f"-Wl,--file-alignment,{hex(PE_ALIGN)}",
         f"-Wl,--section-alignment,{hex(PE_ALIGN)}",
     ]
-
-
-_PE_STRUCTURAL_CONSTANTS = {0x5A4D, 0x00004550}  # MZ header, PE signature
 
 
 def _to_int(value) -> int:
@@ -232,23 +245,47 @@ def _verify_pe_offsets(
 
 
 def _patch_pe_constants(
-    binary_path: Path, constants: list, data_start: int, debug: bool = False
+    binary_path: Path,
+    constants: list,
+    data_start: int | None,
+    debug: bool = False,
 ) -> None:
     """Patch non-structural integer constants into the PE at their file offsets.
 
     MZ (0x5A4D) and the PE signature (0x00004550) are already satisfied by the
-    format, so they are skipped — patching the nested PE-signature pointer would
-    corrupt the real ``e_lfanew``.  Constants below *data_start* fall inside the
-    headers/code region and cannot be placed without breaking the binary.
+    format, so they are skipped. Nested relative constants are resolved through
+    the generated file's real pointer; direct constants below *data_start* are
+    not patched because they fall inside the headers/code region.
     """
-    to_patch: list[tuple[int, int, int]] = []
+    data: bytes | None = None
+    to_patch: list[tuple[int, int, int, str]] = []
     for entry in constants:
         offset = _entry_field(entry, "offset")
         if offset is None:
             continue
         value = _to_int(_entry_field(entry, "value"))
         size = _entry_field(entry, "size", 4)
-        if value in _PE_STRUCTURAL_CONSTANTS or _entry_field(entry, "is_nested", False):
+        byte_order = _entry_field(entry, "byte_order", "little")
+        nested = _entry_field(entry, "is_nested", False)
+        relative_offset = _entry_field(entry, "relative_offset", 0)
+        structural = (
+            (not nested and offset == 0 and value == 0x5A4D)
+            or (nested and offset == 0x3C and relative_offset == 0 and value == 0x00004550)
+        )
+        if structural:
+            continue
+        if nested:
+            if data is None:
+                data = binary_path.read_bytes()
+            pointer_end = offset + 4
+            if pointer_end > len(data):
+                raise ValueError(f"nested PE pointer at 0x{offset:x} is outside the binary")
+            target = int.from_bytes(data[offset:pointer_end], byteorder="little") + relative_offset
+            if target + size > len(data):
+                raise ValueError(f"nested PE target at 0x{target:x} is outside the binary")
+            to_patch.append((target, value, size, byte_order))
+            continue
+        if data_start is None:
             continue
         if offset < data_start:
             print(
@@ -256,19 +293,36 @@ def _patch_pe_constants(
                 f"header/code region; skipped (use --scan-only to place it)."
             )
             continue
-        to_patch.append((offset, value, size))
+        to_patch.append((offset, value, size, byte_order))
 
     if not to_patch:
         return
     with open(binary_path, "r+b") as f:
-        for offset, value, size in to_patch:
+        for offset, value, size, byte_order in to_patch:
             f.seek(offset)
-            f.write(value.to_bytes(size, byteorder="little"))
+            f.write(value.to_bytes(size, byteorder=byte_order))
             if debug:
                 print(f"[debug] patched constant 0x{value:x} at file offset 0x{offset:x}")
 
 
-def _compile_pe_with_offsets(state: ArayGraphState, debug: bool = False) -> dict:
+def _requires_pe32(constants: list) -> bool:
+    for entry in constants:
+        if not _entry_field(entry, "is_nested", False):
+            continue
+        if _entry_field(entry, "relative_offset", 0) != 0x18:
+            continue
+        value = _to_int(_entry_field(entry, "value"))
+        if _entry_field(entry, "size", 4) == 2 and value == 0x010B:
+            return True
+    return False
+
+
+def _compile_pe_with_offsets(
+    state: ArayGraphState,
+    debug: bool = False,
+    compiler: str = MINGW_GCC,
+    image_base: int = PE_IMAGE_BASE,
+) -> dict:
     """Compile a runnable PE that places offset-constrained strings exactly.
 
     Uses a low-alignment (flat-mapped) PE so ``file_offset == RVA``, and a
@@ -285,21 +339,35 @@ def _compile_pe_with_offsets(state: ArayGraphState, debug: bool = False) -> dict
 
     main_c = BUILD_DIR_WIN / "main.c"
     output_binary = BUILD_DIR_WIN / "app.exe"
-    flags = _mingw_pe_offset_flags()
+    flags = _mingw_pe_offset_flags(image_base)
 
     # Pass 1 (probe): locate where the .oray section data starts.
     main_c.write_text(generate_pe_offset_c_source(PE_SENTINEL, free_strings))
-    subprocess.run([MINGW_GCC, "-o", str(output_binary), str(main_c), *flags], check=True)
-    data_start = output_binary.read_bytes().find(PE_SENTINEL)
+    subprocess.run([compiler, "-o", str(output_binary), str(main_c), *flags], check=True)
+    probe_data = output_binary.read_bytes()
+    data_start = probe_data.find(PE_SENTINEL)
     if data_start < 0:
         raise RuntimeError("PE offset probe failed: .oray sentinel not found in binary")
     if debug:
         print(f"[debug] .oray section data starts at file offset 0x{data_start:x}")
 
-    # Pass 2: build the padded blob so each string lands on its file offset.
-    blob = build_pe_offset_blob(offset_sections, data_start)
+    # Header constraints such as MZ at offset zero may already be satisfied by
+    # the probe PE. Only section-placeable strings need to enter the .oray blob.
+    placeable_sections: list[tuple[int, bytes]] = []
+    for offset, data in offset_sections:
+        if offset < data_start:
+            if probe_data[offset:offset + len(data)] != data:
+                raise ValueError(
+                    f"offset 0x{offset:x} is inside the PE headers and is not "
+                    "satisfied by the generated structure"
+                )
+        else:
+            placeable_sections.append((offset, data))
+
+    # Pass 2: build the padded blob so each placeable string lands exactly.
+    blob = build_pe_offset_blob(placeable_sections, data_start)
     main_c.write_text(generate_pe_offset_c_source(blob, free_strings))
-    subprocess.run([MINGW_GCC, "-o", str(output_binary), str(main_c), *flags], check=True)
+    subprocess.run([compiler, "-o", str(output_binary), str(main_c), *flags], check=True)
 
     _verify_pe_offsets(output_binary, offset_sections, debug=debug)
     _patch_pe_constants(output_binary, state.get("rule_constants", []), data_start, debug=debug)
@@ -321,10 +389,18 @@ def _compile_pe_binary(state: ArayGraphState, debug: bool = False) -> dict:
     strings are embedded as plain global arrays; YARA scans the whole file, so
     no linker script or post-compilation patching is needed.
     """
-    if any(_entry_field(s, "offset") is not None for s in state["rule_strings"]):
+    pe32 = _requires_pe32(state.get("rule_constants", []))
+    compiler = MINGW_GCC_32 if pe32 else MINGW_GCC
+    image_base = PE_IMAGE_BASE_32 if pe32 else PE_IMAGE_BASE
+    _min_b, max_b = _parse_filesize_constraint(state.get("normalized_rule", ""))
+    if max_b is not None or any(
+        _entry_field(s, "offset") is not None for s in state["rule_strings"]
+    ):
         BUILD_DIR_WIN.mkdir(parents=True, exist_ok=True)
         (BUILD_DIR_WIN / "normalized_rule.yar").write_text(state["normalized_rule"])
-        return _compile_pe_with_offsets(state, debug=debug)
+        return _compile_pe_with_offsets(
+            state, debug=debug, compiler=compiler, image_base=image_base
+        )
 
     BUILD_DIR_WIN.mkdir(parents=True, exist_ok=True)
 
@@ -369,8 +445,11 @@ def _compile_pe_binary(state: ArayGraphState, debug: bool = False) -> dict:
     main_c.write_text(source_code)
 
     subprocess.run(
-        [MINGW_GCC, "-o", str(output_binary), str(main_c)],
+        [compiler, "-o", str(output_binary), str(main_c)],
         check=True,
+    )
+    _patch_pe_constants(
+        output_binary, state.get("rule_constants", []), data_start=None, debug=debug
     )
 
     print(f"PE binary compiled: {output_binary}")
@@ -393,7 +472,7 @@ def _write_linux_artifact(
     BUILD_DIR.mkdir(parents=True, exist_ok=True)
     (BUILD_DIR / "normalized_rule.yar").write_text(state["normalized_rule"])
 
-    str_sections = _assign_offsets(state["rule_strings"])
+    str_sections = _assign_offsets(state["rule_strings"], pack=True)
     if debug:
         _print_debug_sections(str_sections)
 
@@ -427,7 +506,7 @@ def _write_pe_artifact(
     BUILD_DIR_WIN.mkdir(parents=True, exist_ok=True)
     (BUILD_DIR_WIN / "normalized_rule.yar").write_text(state["normalized_rule"])
 
-    str_sections = _assign_offsets(state["rule_strings"])
+    str_sections = _assign_offsets(state["rule_strings"], pack=True)
     if debug:
         _print_debug_sections(str_sections)
 
@@ -485,7 +564,7 @@ def compile_binary(state: ArayGraphState, scan_only: bool = False, debug: bool =
     normalized_rule = state["normalized_rule"]
     (BUILD_DIR / "normalized_rule.yar").write_text(normalized_rule)
 
-    str_sections = _assign_offsets(state["rule_strings"])
+    str_sections = _assign_offsets(state["rule_strings"], pack=True)
     if debug:
         _print_debug_sections(str_sections)
 

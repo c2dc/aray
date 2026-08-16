@@ -27,15 +27,51 @@ def route_file_type(state: ArayGraphState) -> dict:
     constants = state.get("rule_constants", [])
     strings = state.get("rule_strings", [])
     rule_text = state.get("normalized_rule", "")
+    _has_uint_at_zero = bool(
+        re.search(
+            r'\b(?:u?int(?:16|32)(?:be)?)\s*\(\s*0\s*\)',
+            rule_text,
+            re.IGNORECASE,
+        )
+    )
+    _has_string_at_zero = bool(re.search(r'\$\w+\s+at\s+0(?:x0*)?\b', rule_text))
+    _has_string_placement = bool(
+        re.search(r'\$(?:\w+)?\s+(?:at|in\s*\()', rule_text, re.IGNORECASE)
+    )
+
+    # A fixed non-PE header wins over format hints such as a wide string. For
+    # example, an OLE magic at offset zero must remain an OLE-like generic blob.
+    for constant in constants:
+        offset = constant.get("offset") if isinstance(constant, dict) else constant.offset
+        value = constant.get("value") if isinstance(constant, dict) else constant.value
+        size = constant.get("size", 4) if isinstance(constant, dict) else constant.size
+        byte_order = (
+            constant.get("byte_order", "little")
+            if isinstance(constant, dict)
+            else constant.byte_order
+        )
+        if offset == 0 and _has_uint_at_zero:
+            numeric = int(value, 16) if isinstance(value, str) else value
+            expected = numeric.to_bytes(size, byteorder=byte_order)
+            if expected != b"MZ":
+                return {"file_type": "generic"}
+
+    # Ranged witnesses inside the header region are easier and safer to
+    # construct as a flat scanner blob, even when integer checks resemble PE.
+    for string in strings:
+        range_start = (
+            string.get("range_start")
+            if isinstance(string, dict)
+            else string.range_start
+        )
+        if range_start is not None and range_start < 0x200 and _has_string_placement:
+            return {"file_type": "generic"}
 
     if _is_pe_rule(constants, strings):
         return {"file_type": "pe"}
 
     # Cross-check: the rule text must actually contain the offset-0 expression
     # before we trust the LLM-extracted offset (guards against hallucination).
-    _has_uint_at_zero = bool(re.search(r'\buint(?:16|32)\s*\(\s*0\s*\)', rule_text, re.IGNORECASE))
-    _has_string_at_zero = bool(re.search(r'\$\w+\s+at\s+0(?:x0*)?\b', rule_text))
-
     # Any constant anchored at offset 0 (but not PE magic) → generic binary
     for c in constants:
         offset = c.get("offset") if isinstance(c, dict) else c.offset
@@ -45,7 +81,16 @@ def route_file_type(state: ArayGraphState) -> dict:
     # Any string anchored at offset 0 → generic binary
     for s in strings:
         offset = s.get("offset") if isinstance(s, dict) else s.offset
+        range_start = (
+            s.get("range_start") if isinstance(s, dict) else s.range_start
+        )
         if offset == 0 and _has_string_at_zero:
+            return {"file_type": "generic"}
+        # ELF headers occupy the low file region. Exact low offsets without PE
+        # structural evidence are scanner blobs, not runnable ELF layouts.
+        if offset is not None and offset < 0x200 and _has_string_placement:
+            return {"file_type": "generic"}
+        if range_start is not None and range_start < 0x200 and _has_string_placement:
             return {"file_type": "generic"}
 
     return {"file_type": "elf"}
@@ -59,7 +104,7 @@ def write_generic(state: ArayGraphState, debug: bool = False) -> dict:
     auto-detected from the magic bytes written at offset 0.
     """
     from aray.artifact_writer import write_generic_artifact
-    from aray.codegen import _assign_offsets
+    from aray.codegen import _assign_offsets, _constants_to_sections
     from aray.compiler import _parse_filesize_constraint, _print_debug_sections
     from aray.constants import BANNER, BUILD_DIR_GENERIC
 
@@ -70,7 +115,13 @@ def write_generic(state: ArayGraphState, debug: bool = False) -> dict:
     # Use a small base offset and tight packing so that unconstrained strings
     # don't push the artifact past a tight filesize < N constraint.
     # 0x10 is safe: it clears any offset-0 magic bytes (uint16/uint32 constants).
-    str_sections = _assign_offsets(state["rule_strings"], default_base=0x10, pack=True)
+    constant_sections = _constants_to_sections(constants)
+    str_sections = _assign_offsets(
+        state["rule_strings"],
+        default_base=0x10,
+        pack=True,
+        reserved_sections=constant_sections,
+    )
     if debug:
         _print_debug_sections(str_sections)
 
@@ -178,6 +229,28 @@ def fail_normalization(state: ArayGraphState) -> dict:
     attempts = state.get("normalize_attempts", 0)
     print(f"[normalize] FAILED after {attempts} attempt(s): {reason}")
     return {"normalization_error": reason}
+
+
+def assess_constructibility(state: ArayGraphState) -> dict:
+    """Classify terminal unsupported or impossible constraints."""
+    from aray.capabilities import assess_constructibility as assess
+
+    result = assess(state["normalized_rule"])
+    if result.disposition != "constructible":
+        print(f"[preflight] {result.disposition}: {result.reason}")
+    return {
+        "constructibility": result.disposition,
+        "constructibility_code": result.code,
+        "constructibility_reason": result.reason,
+    }
+
+
+def fail_construction(state: ArayGraphState) -> dict:
+    """Stop the graph when capability preflight rejects a rule."""
+    return {
+        "construction_error": state.get("constructibility_reason")
+        or "rule is not constructible"
+    }
 
 
 def normalize_rule(state: ArayGraphState, llm: ChatOpenAI, use_structured: bool = True) -> dict:
@@ -328,7 +401,23 @@ def normalize_rule(state: ArayGraphState, llm: ChatOpenAI, use_structured: bool 
 
 
 def extract_strings(state: ArayGraphState, llm: ChatOpenAI, use_structured: bool = True) -> dict:
-    """Use LLM to extract strings from the YARA rule."""
+    """Extract strings deterministically, falling back to the LLM if needed."""
+    from aray.yara_extraction import (
+        UnsupportedExtractionError,
+        extract_strings_deterministic,
+    )
+
+    try:
+        strings = extract_strings_deterministic(state["normalized_rule"])
+        print("[extract-strings] deterministic")
+        return {
+            "rule_strings": strings,
+            "strings_extraction_source": "deterministic",
+            "has_condition": any(string.offset is not None for string in strings),
+        }
+    except UnsupportedExtractionError as exc:
+        print(f"[extract-strings] deterministic fallback: {exc}")
+
     print(f"[extract-strings] using model={llm.model_name}")
     sys_msg = SystemMessage(
         content=(
@@ -348,11 +437,32 @@ def extract_strings(state: ArayGraphState, llm: ChatOpenAI, use_structured: bool
 
     response = _invoke_llm(llm, YaraStrings, [sys_msg, human_msg], use_structured)
     has_condition = any(s.offset is not None for s in response.strings)
-    return {"rule_strings": response.strings, "has_condition": has_condition}
+    return {
+        "rule_strings": response.strings,
+        "strings_extraction_source": "llm_fallback",
+        "has_condition": has_condition,
+    }
 
 
 def extract_constants(state: ArayGraphState, llm: ChatOpenAI, use_structured: bool = True) -> dict:
-    """Use LLM to extract constants from the YARA rule."""
+    """Extract constants deterministically, falling back to the LLM if needed."""
+    from aray.yara_extraction import (
+        UnsupportedExtractionError,
+        extract_constants_deterministic,
+    )
+
+    try:
+        constants = extract_constants_deterministic(state["normalized_rule"])
+        print("[extract-constants] deterministic")
+        return {
+            "rule_constants": constants,
+            "constants_extraction_source": "deterministic",
+            "has_condition": state.get("has_condition", False)
+            or any(constant.offset is not None for constant in constants),
+        }
+    except UnsupportedExtractionError as exc:
+        print(f"[extract-constants] deterministic fallback: {exc}")
+
     print(f"[extract-constants] using model={llm.model_name}")
     sys_msg = SystemMessage(
         content=(
@@ -361,7 +471,7 @@ def extract_constants(state: ArayGraphState, llm: ChatOpenAI, use_structured: bo
             "- `value`: the hex literal on the RIGHT side of `==`, with `0x` prefix (e.g. `0x5A4D`).\n"
             "- `offset`: the literal integer inside the INNERMOST uint call (e.g. `0` for `uint16(0)`, `0x3C` for `uint32(uint32(0x3C))`).\n"
             "- `size`: byte width of the OUTERMOST function — `2` for `uint16`, `4` for `uint32`.\n"
-            "- `is_nested`: `true` only when the expression is `uint32(uint32(...))` (doubly nested); `false` otherwise.\n\n"
+            "- `is_nested`: `true` when the outer uint reads from an inner uint expression; `false` otherwise.\n\n"
             "Examples:\n"
             "  uint16(0) == 0x5A4D              → value=0x5A4D,     offset=0,    size=2, is_nested=false\n"
             "  uint32(0x3C) == 0x4550           → value=0x4550,     offset=0x3C, size=4, is_nested=false\n"
@@ -371,8 +481,14 @@ def extract_constants(state: ArayGraphState, llm: ChatOpenAI, use_structured: bo
     human_msg = HumanMessage(content=state["normalized_rule"])
 
     response = _invoke_llm(llm, YaraConstants, [sys_msg, human_msg], use_structured)
-    has_condition = any(s.offset is not None for s in response.constants)
-    return {"rule_constants": response.constants, "has_condition": has_condition}
+    has_condition = state.get("has_condition", False) or any(
+        s.offset is not None for s in response.constants
+    )
+    return {
+        "rule_constants": response.constants,
+        "constants_extraction_source": "llm_fallback",
+        "has_condition": has_condition,
+    }
 
 
 # ---------------------------------------------------------------------------

@@ -11,7 +11,7 @@ Aray runs on Linux and requires Python 3.12 or newer.
 | Dependency | Required for |
 |---|---|
 | [`uv`](https://docs.astral.sh/uv/) | Python environment and command execution |
-| OpenAI-compatible model | rule normalization and extraction |
+| OpenAI-compatible model | normalization and extraction fallback when deterministic handling is insufficient |
 | `yara` CLI | manual verification and `aray-eval` |
 | GCC and GNU Binutils | runnable Linux ELF output |
 | MinGW `x86_64-w64-mingw32-gcc` | runnable PE32+ output |
@@ -58,7 +58,7 @@ Then run:
 uv run aray data/rules/rule0.yar --scan-only
 ```
 
-GPT-4.1 is the compatibility default and one of the two configurations used for the official synthesis reports. It is not a requirement; any compatible model can be selected.
+GPT-4.1 is the compatibility default. It is not a requirement; any compatible model can be selected, and supported pre-normalized rules may complete without a model call.
 
 ## Local Ollama
 
@@ -80,15 +80,15 @@ Models known to need `--no-stream` through Ollama include `phi4:14b` and `qwen3.
 
 Ollama also exposes cloud-hosted models through its locally running client. The
 configuration example uses
-[`glm-5.2:cloud`](https://ollama.com/library/glm-5.2): Aray sent requests to the
-local Ollama OpenAI-compatible endpoint, while Ollama routed inference to its
-cloud infrastructure.
+[`glm-5.2:cloud`](https://ollama.com/library/glm-5.2): requests go to the local
+Ollama OpenAI-compatible endpoint, while Ollama routes inference to its cloud
+infrastructure.
 
 ```bash
 # Verify that the local Ollama client can access the cloud-hosted model.
 ollama run glm-5.2:cloud
 
-uv run aray-normalize evaluation/rules/cve_rules \
+uv run aray-normalize evaluation/yara-repos/rules/cve_rules \
   --model glm-5.2:cloud \
   --judge-model glm-5.2:cloud \
   --base-url http://localhost:11434/v1
@@ -98,39 +98,21 @@ The equivalent `.normalizer` settings are:
 
 ```toml
 [normalizer]
-directories = ["evaluation/rules/cve_rules"]
+directories = ["evaluation/yara-repos/rules/cve_rules"]
 model = "glm-5.2:cloud"
 judge_model = "glm-5.2:cloud"
 base_url = "http://localhost:11434/v1"
 ```
 
-The same provider setup was used for one official complete-pipeline report. In
-that run, `glm-5.2:cloud` was configured for all model roles and Aray used the
-full-compile backends:
+The Ollama Cloud configuration above is used by the preserved normalization
+experiment. The 416-rule artifact validation is separate: its pre-normalized
+inputs never reached any configured model, so it cannot be used to compare
+providers or extraction models.
 
-```toml
-[evaluator]
-model = "glm-5.2:cloud"
-normalize_model = "glm-5.2:cloud"
-extract_model = "glm-5.2:cloud"
-base_url = "http://localhost:11434/v1"
-normalize_base_url = "http://localhost:11434/v1"
-extract_base_url = "http://localhost:11434/v1"
-workers = 1
-scan_only = false
-```
-
-That official report records 404/416 matches (97.1%) against the frozen
-`evaluation/normalized-glm-5.2-stable` corpus. Because those inputs were already
-normalized, this measures provider/pipeline/backend compatibility rather than
-normalization quality.
-
-The endpoint is local, but the model is not: rule content is sent to Ollama
-Cloud for inference. The `not-needed` placeholder supplied by Aray only
-satisfies the OpenAI client library when connecting to the local gateway;
-Ollama manages access to its cloud service separately. The other official run
-used cloud-hosted GPT-4.1 against the same frozen corpus; the equal result is not
-a normalization-quality or local-versus-cloud comparison.
+When inference is actually required, the endpoint is local but the model is not:
+rule content is sent to Ollama Cloud. The `not-needed` placeholder supplied by
+Aray only satisfies the OpenAI client library when connecting to the local
+gateway; Ollama manages access to its cloud service separately.
 
 ## Other Gateways
 
@@ -158,7 +140,7 @@ OpenRouter throttling has been observed under sustained batch workloads.
 
 ## Separate Models per Role
 
-Normalization handles regex replacement, count expansion, and semantic comparison, so it generally benefits more from a capable model. Extraction has a smaller structured output and can often use a cheaper or local model.
+Normalization handles regex replacement, count expansion, and semantic comparison, so it generally benefits more from a capable model. Deterministic extraction handles the supported subset; its fallback has a smaller structured output and can often use a cheaper or local model.
 
 ```bash
 uv run aray rule.yar \
@@ -175,6 +157,7 @@ uv run aray rule.yar \
   --normalize-api-key "$OPENAI_KEY" \
   --extract-model phi4:14b \
   --extract-base-url http://localhost:11434/v1 \
+  --extract-reasoning-effort none \
   --extract-no-stream \
   --scan-only
 ```
@@ -192,6 +175,9 @@ uv run aray rule.yar \
 | `EXTRACT_BASE_URL` | extraction endpoint |
 | `NORMALIZE_API_KEY` | normalization credential |
 | `EXTRACT_API_KEY` | extraction credential |
+| `OPENAI_REASONING_EFFORT` | shared reasoning effort (`none`, `low`, `medium`, `high`, `max`) |
+| `NORMALIZE_REASONING_EFFORT` | normalization reasoning effort |
+| `EXTRACT_REASONING_EFFORT` | extraction fallback reasoning effort |
 
 Resolution precedence is:
 
@@ -225,6 +211,9 @@ uv run aray RULE_PATH [OPTIONS]
 | `--extract-base-url URL` | extraction endpoint |
 | `--normalize-api-key KEY` | normalization credential |
 | `--extract-api-key KEY` | extraction credential |
+| `--reasoning-effort LEVEL` | reasoning effort shared by both roles |
+| `--normalize-reasoning-effort LEVEL` | normalization reasoning effort |
+| `--extract-reasoning-effort LEVEL` | extraction fallback reasoning effort |
 | `--no-stream` | disable streaming for all model calls |
 | `--normalize-no-stream` | disable streaming only for normalization and judging |
 | `--extract-no-stream` | disable streaming only for extraction |

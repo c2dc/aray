@@ -8,17 +8,17 @@ All notable changes to this project will be documented in this file.
 
 - **Standalone YARA source selection** (`aray/yara_source.py`): lexically selects the first non-private rule, inlines reachable same-file and sibling dependencies, preserves imports and global constraints, resolves rule sets, and assigns stable names to anonymous strings before any model call.
 - **Deterministic normalization validation** (`aray/yara_validation.py`): checks syntax, modifiers, retained values, count expansions, regex witnesses, and hex witnesses; supported complete count expansions can bypass the LLM judge when fully proven.
-- **Deterministic evidence extraction** (`aray/yara_extraction.py`): derives fixed string bytes, identifiers, modifiers, positive/negative references, exact and ranged placements, simple match counts, and endian-aware integer checks from normalized YARA source.
-- **Capability preflight** (`aray/capabilities.py`, `aray/nodes.py`, `aray/graph.py`): classifies `pe.*` conditions as `unsupported`, prescribed whole-file hash preimages as `infeasible`, and out-of-range integer equalities as `unsatisfiable` before extraction, routing, or construction.
+- **Deterministic evidence extraction** (`aray/yara_extraction.py`): derives condition-aware required and negated strings, `all`/`any` sets, simple counts, exact and ranged placements, ASCII/UTF-8/hex/wide fields and modifiers, endian-aware integer checks, nested PE-relative expressions, and concrete witnesses for simple integer comparisons from normalized YARA source. LLM extraction is now fallback-only for syntax outside this subset.
+- **Capability preflight** (`aray/capabilities.py`, `aray/nodes.py`, `aray/graph.py`): runs after normalization/judging and before extraction to classify unsupported `pe.*` and `math.*` conditions, infeasible prescribed whole-file hash preimages, unsatisfiable integer values, and a missing PE32 compiler.
 - **Signed and PE32 integer support** (`aray/yara_extraction.py`, `aray/compiler.py`, `aray/artifact_writer.py`): adds deterministic `int16` handling and narrow `uint16(uint32(0x3c)+delta)` PE32 checks with `i686-w64-mingw32-gcc` selection.
-- **Diagnostic evaluation schema 2.1** (`aray/diagnostics.py`, `aray/evaluator.py`): records environment and tool versions, Git/tool/corpus provenance, source and normalized hashes, semantic dispositions, node state and timings, compiler and YARA output, bounded tracebacks, artifact manifests and hashes, byte-level witness analysis, structured failures, and deterministic report clusters without storing API keys.
+- **Evaluation dispositions and provenance** (`aray/evaluator.py`): reports per-rule semantic dispositions, failure categories, normalization/extraction paths, and actual LLM use alongside status and YARA results, with aggregate counts; API keys are not serialized.
 
 ### Changed
 
 - **Batch normalization reliability** (`aray/normalizer.py`): retries failed verdicts and transient invocation errors up to three times, writes only accepted candidates, and removes stale output after terminal failures or errors.
 - **Ruleset evaluation** (`aray/evaluator.py`, `aray/nodes.py`): synthesizes and scans the selected standalone rule and its dependency closure rather than allowing unrelated rules from the source file to affect evaluation.
 - **Compact and modifier-aware construction** (`aray/codegen.py`, `aray/compiler.py`): emits byte-exact UTF-8/UTF-16LE witnesses, respects `ascii wide`, `fullword`, `nocase`, match counts and ranges, packs runnable ELF files, and selects the low-alignment PE backend for tight filesize constraints.
-- **Format routing and constants** (`aray/nodes.py`, `aray/compiler.py`, `aray/artifact_writer.py`): no longer treats `wide` as PE evidence, recognizes native PE/ELF magic, routes incompatible low offsets to generic output, and writes `uint16be`/`uint32be` values using their declared byte order.
+- **Format routing and constants** (`aray/nodes.py`, `aray/compiler.py`, `aray/artifact_writer.py`): recognizes native PE/ELF magic, lets fixed non-PE headers and low ranged placements override wide/MZ hints when a generic scanner blob is the feasible path, and writes `uint16be`/`uint32be` values using their declared byte order.
 - **PE routing boundary** (`aray/capabilities.py`, `aray/nodes.py`): YARA module `pe.*` references no longer act as format evidence; only native byte-level structural checks can select the PE backend.
 - **CI MinGW coverage** (`.github/workflows/ci.yml`): installs `gcc-mingw-w64-i686` alongside the x86-64 toolchain for PE32 integration coverage.
 
@@ -26,13 +26,14 @@ All notable changes to this project will be documented in this file.
 
 - **Deterministic retained-value canonicalization** (`aray/yara_validation.py`): retained fixed literals and fixed hex sequences are restored directly from the original rule, while linear hex wildcards and jumps are converted to canonical witnesses without model-side character or byte counting. Regex and complex-hex witnesses continue through `yara-python` validation.
 - **Normalization regressions** (`tests/test_yara_validation.py`): covers long repeated literals, escaped values, model-induced type changes, fixed hex changes, exact and ranged jumps, partial wildcards, and complex patterns that must not be guessed.
-- **Complete result retention** (`aray/evaluator.py`): schema 2.1 verifies that serialization preserves every result and writes reports atomically, preventing future report arrays from being silently truncated.
+- **Fullword boundaries** (`aray/codegen.py`): reserves zero-valued boundaries around `fullword` witnesses so neighboring generated data cannot extend the matched word.
+- **Nested PE-relative comparisons** (`aray/compiler.py`): patches supported nested constants relative to the generated PE's actual `e_lfanew` target instead of treating the source pointer offset as the final patch location.
 
 ### Documentation
 
-- **Official evaluation baseline** (`README.md`, `docs/site/`): publishes only the August 14 full-corpus GPT-4.1 and GLM-5.2 Cloud reports over `evaluation/normalized-glm-5.2-stable`, both at 404/416 matches (97.1%), and explains that the frozen inputs make these provider/pipeline/backend compatibility runs rather than normalization-quality comparisons.
-- **Complete evaluation auditability** (`README.md`, `docs/site/evaluation.md`): records that both schema 2.1 reports contain all 416 per-rule results, the same 12 failure dispositions, and two observed construction failures caused by the evaluation environment lacking `i686-w64-mingw32-gcc`.
-- **Public result cleanup** (`README.md`, `docs/site/`): removes superseded experiment tables, targeted projections, and prior GPT-4.1/GLM-5.2 figures. Phi and Qwen remain configuration examples until their planned full-corpus evaluations are available.
+- **Deterministic corpus validation** (`README.md`, `docs/site/`): publishes the August 15 full-compile result over 416 normalized Yara-Rules inputs at 406/416 matches (97.6%). All 406 rules that reached extraction used deterministic string and constant extraction; the other 10 stopped at preflight, and no rule invoked an LLM.
+- **Failure accounting** (`README.md`, `docs/site/evaluation.md`): records seven unsupported `pe.*` cases, two infeasible whole-file hash preimages, and one unsatisfiable integer value. Both MinGW architectures were installed, so `RAT_FlyingKitten` and `packer_compiler_signatures` now pass.
+- **Evaluation provenance** (`aray/evaluator.py`, `docs/site/assets/yara-rules-416-deterministic.json`): records normalization and extraction paths per rule, aggregates actual LLM use, and publishes a machine-readable summary. Previous pipeline experiments and provider comparisons were removed; normalization experiments remain preserved.
 
 ## [0.9.0] - 2026-08-05
 
