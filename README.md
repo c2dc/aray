@@ -32,7 +32,7 @@ $ yara data/rules/rule0.yar build/linux/app
 rule0 build/linux/app
 ```
 
-Validated on **416 real-world rules** from the [Yara-Rules community repository](https://github.com/Yara-Rules/rules). The current full-compile validation produced **406/416 matches (97.6%)**. All 416 rules skipped normalization, all 406 rules that reached extraction used the deterministic string and constant extractors, and the remaining 10 stopped at capability preflight. **No rule invoked an LLM.** See the [versioned validation summary](docs/site/assets/yara-rules-416-deterministic.json).
+Validated end to end in two stages on **416 selected source entries** from the [Yara-Rules community repository](https://github.com/Yara-Rules/rules). Aray's normalization workflow accepted all 416 entries: 182 required no model normalization and 234 were model-normalized. The exact outputs were then frozen for full-compile-mode realization, which produced **406/416 matches (97.6%)** against the associated upstream original rules and 10 explicit preflight dispositions. All 406 entries that reached extraction used deterministic string and constant extractors, and **no model was invoked during the realization stage**. See the [versioned validation summary](docs/site/assets/yara-rules-416-deterministic.json).
 
 > [!WARNING]
 > Aray is a research prototype under active development. APIs, CLI flags, supported YARA constructs, and artifact formats may change.
@@ -140,7 +140,7 @@ read + select rule -> optional LLM normalize/judge
 3. **Reject known terminal constraints in preflight.** After normalization and judging but before extraction, Aray classifies unsupported `pe.*` and `math.*` conditions, infeasible prescribed whole-file hashes, unsatisfiable integer values, and a missing PE32 compiler.
 4. **Extract supported evidence deterministically.** Aray derives condition-required and negated strings, `all`/`any` sets, simple counts, exact and ranged placements, string modifiers, endian-aware integer reads, nested PE-relative expressions, and concrete witnesses for simple integer comparisons. The extraction model is invoked only when normalized syntax is outside that deterministic subset.
 5. **Construct the artifact deterministically.** Python code assigns offsets, encodes ASCII/hex/wide strings, routes the target format, generates source or binary structures, patches constants, and applies file-size constraints.
-6. **Verify independently.** `aray-eval` invokes the real YARA CLI against each generated artifact and records the result. For a single run, use the `yara` command shown in the Quick Start.
+6. **Verify with YARA.** `aray-eval` invokes the YARA CLI against each generated artifact and records the result. The accepted normalized rule is the default oracle; `--validate-original` associates and selects the upstream source rule for an independent check.
 
 LangGraph orchestrates these stages; it does not generate the binaries. The binary construction logic lives in `aray/codegen.py`, `aray/compiler.py`, and `aray/artifact_writer.py`.
 
@@ -156,7 +156,7 @@ The backend operates on typed string and constant entries. It does not ask the m
 
 ### Compiler-Free Writers
 
-`--scan-only` bypasses GCC and MinGW. Aray writes minimal ELF64 or PE32/PE32+ structures directly and places rule-driven bytes at their assigned file offsets. These files are intended for scanning; they are not substitutes for the runnable artifacts produced by the compiler backends.
+`--scan-only` bypasses GCC and MinGW. Aray writes minimal ELF64 or PE64 structures directly and places rule-driven bytes at their assigned file offsets. These files are intended for scanning; they are not substitutes for the runnable artifacts produced by the compiler backends.
 
 <p align="center">
   <img src="docs/site/diagrams/aray-pipeline-determinism-artifacts.svg" width="760" alt="Aray artifact backends and their reproducibility properties" />
@@ -207,15 +207,16 @@ See the [sample rule catalog](data/rules/CATALOG.md) for focused examples of eac
 
 ## Evaluation
 
-The current validation covers 416 public rules from [Yara-Rules/rules](https://github.com/Yara-Rules/rules):
+The current evaluation follows one 416-entry lineage from [Yara-Rules/rules](https://github.com/Yara-Rules/rules) through two Aray stages:
 
-| Corpus | Mode | Matches | Preflight dispositions | Rules using an LLM |
-|---|---|---:|---:|---:|
-| Yara-Rules, 416 normalized rules | Full compile, 1 worker | **406 (97.6%)** | 10 | **0** |
+| Aray stage | Input | Result | Model-dependent path |
+|---|---|---|---:|
+| Normalization | 416 selected source entries | **416 accepted** | 234 normalized; 182 pass-through |
+| Full-compile-mode realization, 1 worker | 416 frozen accepted outputs | **406 matches (97.6%)**, 10 preflight dispositions | **0** |
 
-The result contains 406 `matched`, seven `unsupported`, two `infeasible`, and one `unsatisfiable` dispositions, with zero unexplained mismatches or construction failures. The ten non-matches are seven unsupported `pe.*` rules, two prescribed whole-file hash preimages, and one out-of-range integer value.
+The workflow produced 406 `matched`, seven `unsupported`, two `infeasible`, and one `unsatisfiable` terminal dispositions, with zero unexplained mismatches or construction failures. Positive-fixture yield was 406/416, and conditional realization was 406/406.
 
-Every rule in this major public corpus bypassed normalization. The 406 constructible rules used both deterministic extractors; the 10 remaining rules terminated before extraction. Repeating the run with extraction roles configured as `glm-5.2:cloud`, `qwen3.5:4b`, `phi-4:14b`, and `gpt-4.1` produced the same result because none of those models was invoked. These are inactive configuration cross-checks, not model benchmarks.
+Every frozen input bypassed normalization in the second stage because Aray had already performed it in the first. The 406 constructible entries used both deterministic extractors; the 10 remaining entries terminated before extraction. Repeating the realization stage with extraction roles configured as GLM-5.2, Qwen 3.5, Phi-4, and GPT-4.1 produced the same result because none of those models was invoked. These are inactive configuration cross-checks, not model benchmarks. The published acceptance oracle scans each associated upstream original rule. Association is strict: filename, trailing directory path, and public rule name must agree uniquely.
 
 See [Evaluation](docs/site/evaluation.md) for methodology, failure accounting, preserved normalization experiments, and the [machine-readable summary](docs/site/assets/yara-rules-416-deterministic.json).
 
@@ -251,6 +252,7 @@ ELF integration tests require GCC and YARA. PE integration tests require MinGW a
 - [Architecture and deterministic backends](docs/site/architecture.md)
 - [Configuration and model providers](docs/site/configuration.md)
 - [Evaluation and batch tools](docs/site/evaluation.md)
+- [Research paper](docs/paper/main.pdf)
 - [Sample rule catalog](data/rules/CATALOG.md)
 
 Build and preview the documentation locally:
@@ -269,13 +271,13 @@ aray/
   nodes.py            Rule reading, interpretation, and routing
   codegen.py          Assembly, linker, and PE source generation
   compiler.py         Runnable ELF/PE backends and patching
-  artifact_writer.py  Direct ELF64/PE32/PE32+/generic writers
+  artifact_writer.py  Direct ELF64/PE64/generic writers
   capabilities.py     Deterministic constructibility preflight
   evaluator.py        Batch construction and YARA verification
   yara_extraction.py  Deterministic fixed-evidence extraction
   normalizer.py       Batch normalization and judging
 data/rules/           Focused example rules
-evaluation/           Public rule corpus
+  evaluation/           Ignored workspace for runtime corpus clones and reports
 tests/                Unit, integration, and end-to-end tests
 ```
 

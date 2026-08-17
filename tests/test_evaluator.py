@@ -12,6 +12,8 @@ import pytest
 from aray.evaluator import (
     EvalConfig,
     EvalResult,
+    OriginalRuleAssociation,
+    _associate_original_rules,
     _build_eval_config,
     _execution_provenance,
     _extract_first_rule_name,
@@ -24,7 +26,9 @@ from aray.evaluator import (
     _run_one,
     _write_report,
     _yara_scan,
+    main as evaluator_main,
     parse_args,
+    run_evaluation,
 )
 from aray.yara_source import (
     AmbiguousRuleError,
@@ -172,6 +176,86 @@ class TestFindYarFiles:
         index.write_text('include "other.yar"\n')
 
         assert _find_yar_files([index]) == []
+
+
+class TestAssociateOriginalRules:
+    @staticmethod
+    def _write_rule(path: Path, name: str) -> Path:
+        path.parent.mkdir(parents=True, exist_ok=True)
+        path.write_text(f"rule {name} {{ condition: true }}")
+        return path
+
+    def test_matches_parent_directory_filename_and_rule_name(self, tmp_path):
+        normalized = self._write_rule(
+            tmp_path / "normalized" / "malware" / "sample.yar", "Sample"
+        )
+        original = self._write_rule(
+            tmp_path / "upstream" / "rules" / "malware" / "sample.yar", "Sample"
+        )
+
+        association = _associate_original_rules([normalized], [original])[normalized]
+
+        assert association == OriginalRuleAssociation(path=original)
+
+    def test_chooses_longest_matching_path_suffix(self, tmp_path):
+        normalized = self._write_rule(
+            tmp_path / "normalized" / "nested" / "malware" / "sample.yar",
+            "Sample",
+        )
+        shorter = self._write_rule(
+            tmp_path / "source-a" / "malware" / "sample.yar", "Sample"
+        )
+        longer = self._write_rule(
+            tmp_path / "source-b" / "nested" / "malware" / "sample.yar",
+            "Sample",
+        )
+
+        association = _associate_original_rules(
+            [normalized], [shorter, longer]
+        )[normalized]
+
+        assert association.path == longer
+
+    def test_rejects_rule_name_mismatch(self, tmp_path):
+        normalized = self._write_rule(
+            tmp_path / "normalized" / "malware" / "sample.yar", "Normalized"
+        )
+        original = self._write_rule(
+            tmp_path / "source" / "malware" / "sample.yar", "Original"
+        )
+
+        association = _associate_original_rules([normalized], [original])[normalized]
+
+        assert association.path is None
+        assert association.failure_category == "original_rule_name_mismatch"
+
+    def test_rejects_ambiguous_best_match(self, tmp_path):
+        normalized = self._write_rule(
+            tmp_path / "normalized" / "malware" / "sample.yar", "Sample"
+        )
+        originals = [
+            self._write_rule(
+                tmp_path / root / "malware" / "sample.yar", "Sample"
+            )
+            for root in ("source-a", "source-b")
+        ]
+
+        association = _associate_original_rules([normalized], originals)[normalized]
+
+        assert association.path is None
+        assert association.failure_category == "original_rule_ambiguous"
+
+    def test_requires_matching_parent_directory(self, tmp_path):
+        normalized = self._write_rule(
+            tmp_path / "normalized" / "malware" / "sample.yar", "Sample"
+        )
+        original = self._write_rule(
+            tmp_path / "source" / "different" / "sample.yar", "Sample"
+        )
+
+        association = _associate_original_rules([normalized], [original])[normalized]
+
+        assert association.failure_category == "original_rule_not_found"
 
 
 # ---------------------------------------------------------------------------
@@ -533,6 +617,20 @@ class TestYaraScan:
         assert stdout == "RuleName /tmp/app\n"
         assert stderr == ""
 
+    def test_filters_by_rule_identifier_when_provided(self, tmp_path):
+        rule = tmp_path / "r.yar"
+        binary = tmp_path / "app"
+        mock_result = MagicMock(returncode=0, stdout="Rule /tmp/app\n", stderr="")
+
+        with patch("aray.evaluator.subprocess.run", return_value=mock_result) as mock_run:
+            _yara_scan(rule, binary, "Rule")
+
+        mock_run.assert_called_once_with(
+            ["yara", "-i", "Rule", str(rule), str(binary)],
+            capture_output=True,
+            text=True,
+        )
+
     def test_returns_nonzero_on_mismatch(self, tmp_path):
         rule = tmp_path / "r.yar"
         binary = tmp_path / "app"
@@ -722,6 +820,8 @@ class TestBuildEvalConfig:
             workers=None,
             output=None,
             keep_artifacts=False,
+            validate_original=None,
+            original_directories=None,
         )
         defaults.update(kwargs)
         return argparse.Namespace(**defaults)
@@ -737,6 +837,40 @@ class TestBuildEvalConfig:
         file_cfg = {"evaluator": {"directories": ["config_dir"]}}
         cfg = _build_eval_config(args, file_cfg)
         assert cfg.directories == ["config_dir"]
+
+    def test_original_validation_from_toml(self):
+        args = self._make_args()
+        file_cfg = {
+            "evaluator": {
+                "validate_original": True,
+                "original_directories": ["source-rules"],
+            }
+        }
+
+        cfg = _build_eval_config(args, file_cfg)
+
+        assert cfg.validate_original is True
+        assert cfg.original_directories == ["source-rules"]
+
+    def test_cli_original_directories_override_toml(self):
+        args = self._make_args(
+            validate_original=True,
+            original_directories=["cli-source-a", "cli-source-b"],
+        )
+        file_cfg = {"evaluator": {"original_directories": ["toml-source"]}}
+
+        cfg = _build_eval_config(args, file_cfg)
+
+        assert cfg.validate_original is True
+        assert cfg.original_directories == ["cli-source-a", "cli-source-b"]
+
+    def test_cli_can_disable_original_validation_from_toml(self):
+        args = self._make_args(validate_original=False)
+        file_cfg = {"evaluator": {"validate_original": True}}
+
+        cfg = _build_eval_config(args, file_cfg)
+
+        assert cfg.validate_original is False
 
     def test_default_model_gpt41(self, monkeypatch):
         monkeypatch.delenv("OPENAI_MODEL", raising=False)
@@ -911,21 +1045,68 @@ class TestWriteReportPath:
             "rules_without_llm": 1,
         }
 
+    def test_report_records_validation_oracle_config(self, tmp_path):
+        out = tmp_path / "report.json"
+        cfg = EvalConfig(
+            directories=[],
+            output=str(out),
+            validate_original=True,
+            original_directories=["upstream/rules"],
+        )
+
+        _write_report([self._make_result()], cfg, "unused")
+
+        config = json.loads(out.read_text())["metadata"]["config"]
+        assert config["validate_original"] is True
+        assert config["original_directories"] == ["upstream/rules"]
+
 
 class TestParseArgs:
-    def test_no_arguments_prints_help_and_exits_zero(self, capsys):
-        with pytest.raises(SystemExit) as excinfo:
-            parse_args([])
+    def test_no_arguments_uses_default_config(self, capsys):
+        args = parse_args([])
 
-        captured = capsys.readouterr()
-        assert excinfo.value.code == 0
-        assert "usage: aray-eval" in captured.out
-        assert captured.err == ""
+        assert args.config == Path(".evaluator")
+        assert args.dirs == []
+        assert capsys.readouterr().out == ""
+
+    def test_main_loads_evaluator_from_current_directory(
+        self, tmp_path, monkeypatch, capsys
+    ):
+        (tmp_path / "rules").mkdir()
+        (tmp_path / ".evaluator").write_text(
+            '[evaluator]\ndirectories = ["rules"]\n'
+        )
+        monkeypatch.chdir(tmp_path)
+        monkeypatch.setattr("sys.argv", ["aray-eval"])
+
+        evaluator_main()
+
+        assert "No .yar files found." in capsys.readouterr().out
 
     def test_accepts_file_path(self):
         args = parse_args(["rule.yar"])
 
         assert args.dirs == ["rule.yar"]
+
+    def test_accepts_original_validation_options(self):
+        args = parse_args(
+            [
+                "normalized",
+                "--validate-original",
+                "--original-directory",
+                "source-a",
+                "--original-directory",
+                "source-b",
+            ]
+        )
+
+        assert args.validate_original is True
+        assert args.original_directories == ["source-a", "source-b"]
+
+    def test_accepts_disabling_original_validation(self):
+        args = parse_args(["normalized", "--no-validate-original"])
+
+        assert args.validate_original is False
 
 
 # ---------------------------------------------------------------------------
@@ -1035,3 +1216,147 @@ class TestRunOneNormalizationFailure:
             _run_one(rule, cfg)
 
         assert f"Artifacts kept at {artifact_dir.resolve()}" in capsys.readouterr().out
+
+
+class TestRunOneOriginalValidation:
+    @staticmethod
+    def _fake_generic_invoke(_state):
+        import aray.constants as constants
+
+        constants.BUILD_DIR_GENERIC.mkdir(parents=True, exist_ok=True)
+        (constants.BUILD_DIR_GENERIC / "normalized_rule.yar").write_text(
+            'rule Sample { strings: $a = "normalized" condition: $a }'
+        )
+        (constants.BUILD_DIR_GENERIC / "output.bin").write_bytes(b"original")
+        return {
+            "needs_normalization": False,
+            "strings_extraction_source": "deterministic",
+            "constants_extraction_source": "deterministic",
+        }
+
+    def test_scans_selected_original_rule_with_identifier(self, tmp_path):
+        normalized = tmp_path / "normalized" / "malware" / "sample.yar"
+        original = tmp_path / "source" / "malware" / "sample.yar"
+        normalized.parent.mkdir(parents=True)
+        original.parent.mkdir(parents=True)
+        normalized.write_text(
+            'rule Sample { strings: $a = "normalized" condition: $a }'
+        )
+        original.write_text(
+            'rule Sample { strings: $a = "original" condition: $a }'
+        )
+        mock_graph = MagicMock()
+        mock_graph.invoke.side_effect = self._fake_generic_invoke
+        calls = []
+
+        def fake_yara_scan(scan_rule, binary, identifier):
+            calls.append((scan_rule.read_text(), binary.name, identifier))
+            return 0, f"Sample {binary}\n", ""
+
+        cfg = EvalConfig(directories=[], validate_original=True)
+        association = OriginalRuleAssociation(path=original)
+        with (
+            patch("aray.evaluator.build_graph", return_value=mock_graph),
+            patch("aray.evaluator._yara_scan", side_effect=fake_yara_scan),
+        ):
+            result = _run_one(normalized, cfg, association)
+
+        assert result.status == "passed"
+        assert result.validation_source == "original"
+        assert result.validation_rule_path == str(original)
+        assert calls == [
+            (
+                'rule Sample { strings: $a = "original" condition: $a }',
+                "output.bin",
+                "Sample",
+            )
+        ]
+
+    def test_missing_association_fails_without_running_pipeline(self, tmp_path):
+        normalized = tmp_path / "sample.yar"
+        normalized.write_text("rule Sample { condition: true }")
+        mock_graph = MagicMock()
+        cfg = EvalConfig(directories=[], validate_original=True)
+
+        with patch("aray.evaluator.build_graph", return_value=mock_graph):
+            result = _run_one(normalized, cfg)
+
+        mock_graph.invoke.assert_not_called()
+        assert result.status == "failed"
+        assert result.disposition == "validation_rule_unavailable"
+        assert result.failure_category == "original_rule_not_found"
+        assert result.validation_source == "original"
+
+
+class TestRunEvaluationOriginalAssociation:
+    @staticmethod
+    def _result(rule_path: Path) -> EvalResult:
+        return EvalResult(
+            rule_path=str(rule_path),
+            rule_name="Sample",
+            status="passed",
+            error=None,
+            duration_seconds=0,
+            yara_stdout="Sample output.bin\n",
+            yara_returncode=0,
+        )
+
+    def test_discovers_and_passes_original_association(self, tmp_path, capsys):
+        normalized = tmp_path / "normalized" / "malware" / "sample.yar"
+        original_root = tmp_path / "source"
+        original = original_root / "malware" / "sample.yar"
+        normalized.parent.mkdir(parents=True)
+        original.parent.mkdir(parents=True)
+        rule = "rule Sample { condition: true }"
+        normalized.write_text(rule)
+        original.write_text(rule)
+        cfg = EvalConfig(
+            directories=[],
+            validate_original=True,
+            original_directories=[str(original_root)],
+        )
+        result = self._result(normalized)
+
+        with patch("aray.evaluator._run_one", return_value=result) as run_one:
+            assert run_evaluation([normalized], cfg) == [result]
+
+        association = run_one.call_args.args[2]
+        assert association == OriginalRuleAssociation(path=original)
+        assert (
+            f"oracle=original normalized={normalized} source={original}"
+            in capsys.readouterr().err
+        )
+
+    def test_prints_normalized_oracle_and_input_path(self, tmp_path, capsys):
+        normalized = tmp_path / "normalized" / "sample.yar"
+        normalized.parent.mkdir()
+        normalized.write_text("rule Sample { condition: true }")
+        cfg = EvalConfig(directories=[])
+        result = self._result(normalized)
+
+        with patch("aray.evaluator._run_one", return_value=result):
+            run_evaluation([normalized], cfg)
+
+        assert (
+            f"oracle=normalized normalized={normalized} source={normalized}"
+            in capsys.readouterr().err
+        )
+
+    def test_prints_unavailable_original_source(self, tmp_path, capsys):
+        normalized = tmp_path / "normalized" / "sample.yar"
+        normalized.parent.mkdir()
+        normalized.write_text("rule Sample { condition: true }")
+        cfg = EvalConfig(
+            directories=[],
+            validate_original=True,
+            original_directories=[str(tmp_path / "missing")],
+        )
+        result = self._result(normalized)
+
+        with patch("aray.evaluator._run_one", return_value=result):
+            run_evaluation([normalized], cfg)
+
+        assert (
+            f"oracle=original normalized={normalized} source=<unavailable>"
+            in capsys.readouterr().err
+        )

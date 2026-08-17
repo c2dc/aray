@@ -31,6 +31,16 @@ directories = [
     "evaluation/normalized-glm-5.2-stable/webshells",
 ]
 
+# Validate synthesized artifacts against the associated upstream source rule
+# instead of the normalized input. Association requires the same filename,
+# parent path suffix, and first public rule name; missing or ambiguous matches
+# fail explicitly. CLI equivalents are --validate-original and one or more
+# --original-directory options.
+validate_original = true
+original_directories = [
+    "evaluation/yara-repos/rules",
+]
+
 # Shared LLM settings for normalization and extraction. These override
 # OPENAI_MODEL and OPENAI_BASE_URL as well as the role-specific environment
 # variables when no role-specific TOML value is set.
@@ -53,17 +63,17 @@ directories = [
 # Optional reasoning controls for providers that expose thinking models.
 # reasoning_effort = "none"
 # normalize_reasoning_effort = "none"
-extract_reasoning_effort = "none"
+# extract_reasoning_effort = "none"
 
 # Disable streaming globally or for one role. Each role inherits the global
 # setting unless its matching no_stream key is true.
 # no_stream = false
 # normalize_no_stream = false
-extract_no_stream = true
+# extract_no_stream = true
 
 # Artifact and execution controls.
-# Run `aray-eval --config .evaluator` to use this input list without positional
-# paths; a completely argument-free invocation only prints CLI help.
+# Run `aray-eval` without positional paths to load this file automatically from
+# the current directory. Use `--config PATH` to select another config file.
 # scan_only = false
 # workers = 1                 # parallel rule evaluations
 # output = "report.json"      # default: timestamped evaluation/reports path

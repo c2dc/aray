@@ -269,6 +269,7 @@ def normalize_rule(state: ArayGraphState, llm: ChatOpenAI, use_structured: bool 
             "   - For required quantifiers (`+`, `{M}`, `{M,N}`) use the minimum M repetitions.\n"
             "   - For character classes like `[a-z0-9]` pick any single character from the class (e.g. `a`).\n"
             "   - For alternation `(a|b)` pick the shortest branch.\n"
+            "   - Regex anchors `^` and `$` are positional assertions, not characters that can simply be removed. The fixed literal must still match the regex when embedded at every file position allowed by the normalized condition. Prefer an unanchored alternative even when it is longer. A start-anchored alternative is valid only when the condition preserves `$name at 0`; an end-anchored alternative is not constructible without an equivalent EOF constraint. When an `N of` expression permits it, select a different, non-anchored string instead.\n"
             "   Example derivation:\n"
             "     Regex:   /basename\\/\\*[a-z0-9]{,6}\\*\\/\\(\\/\\*[a-z0-9]{,5}\\*\\/trim\\/\\*[a-z0-9]{,5}\\*\\/\\(\\/\\*[a-z0-9]{,5}\\*\\//\n"
             "     Literal: \"basename/**/(/**/trim/**/(/**/\"   (using 0 chars for every {,N} group)\n"

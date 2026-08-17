@@ -35,7 +35,7 @@ hide:
 
 <strong>416</strong>
 
-Real-world rules evaluated
+Selected public source entries
 
 </div>
 
@@ -43,7 +43,7 @@ Real-world rules evaluated
 
 <strong>97.6%</strong>
 
-Official full-compile match rate
+Positive-fixture yield in full-compile mode
 
 </div>
 
@@ -144,22 +144,23 @@ Requirements are Linux, Python 3.12+, [`uv`](https://docs.astral.sh/uv/), and th
 | Target | Construction strategy | Output |
 |---|---|---|
 | Linux ELF | GNU assembler sections and a linker script, or a direct minimal ELF64 writer | `build/linux/app` |
-| Windows PE | MinGW with offset-aware two-pass placement, or a direct minimal PE32/PE32+ writer | `build/windows/app.exe` |
+| Windows PE | MinGW with offset-aware two-pass placement, or a direct minimal PE64 writer | `build/windows/app.exe` |
 | Generic | Direct byte-blob writer preserving format magic at offset zero | `build/generic/output{ext}` |
 
 Generated sources and normalized rules remain available in the build directory for inspection. The model never emits C, assembly, linker scripts, PE headers, or complete binary data.
 
 ## Published Evaluation
 
-Aray was validated against 416 public rules from the Yara-Rules community repository. End-to-end success means the generated artifact produced an actual match when scanned by the YARA CLI.
+Aray was evaluated end to end in two stages over 416 selected source entries from the Yara-Rules community repository. The first stage used Aray's own normalization workflow; the second froze those accepted outputs before deterministic realization and YARA scanning.
 
-| Corpus | Mode | Matches | Rules using an LLM |
-|---|---|---:|---:|
-| Yara-Rules, 416 normalized rules | Full compile, 1 worker | **406 / 416 (97.6%)** | **0** |
+| Aray stage | Result | Model-dependent path |
+|---|---|---:|
+| Normalization | **416 / 416 accepted** | 234 normalized; 182 pass-through |
+| Full-compile-mode realization, 1 worker | **406 / 416 matches (97.6%)**, 10 preflight dispositions | **0** |
 
-All 416 rules bypassed normalization. The 406 constructible rules used deterministic string and constant extraction, while seven unsupported `pe.*` rules, two infeasible whole-file hash preimages, and one unsatisfiable integer value stopped at capability preflight before extraction. There were zero unexplained mismatches and zero construction failures.
+Every frozen input bypassed normalization in the second stage because Aray had already performed it in the first. The 406 constructible entries used deterministic string and constant extraction, while seven unsupported `pe.*` rules, two infeasible whole-file hash preimages, and one unsatisfiable integer value stopped at capability preflight before extraction. There were zero unexplained mismatches and zero construction failures, giving 406/406 conditional realization.
 
-The extraction role was configured in separate control runs as GLM-5.2, Qwen 3.5, Phi-4, and GPT-4.1, but none of those models was invoked. The result measures deterministic coverage, artifact construction, installed toolchains, and final YARA acceptance, not provider quality.
+The extraction role was configured in separate realization-stage controls as GLM-5.2, Qwen 3.5, Phi-4, and GPT-4.1, but none of those models was invoked. End-to-end acceptance is an identifier-restricted YARA match against each associated upstream original rule. The result measures workflow completion, not provider quality or universal implication between predicates.
 
 [Review the methodology and collection breakdown](evaluation.md){ .md-button }
 [Download the validation summary](assets/yara-rules-416-deterministic.json){ .md-button }

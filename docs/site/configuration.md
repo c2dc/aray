@@ -104,10 +104,14 @@ judge_model = "glm-5.2:cloud"
 base_url = "http://localhost:11434/v1"
 ```
 
-The Ollama Cloud configuration above is used by the preserved normalization
-experiment. The 416-rule artifact validation is separate: its pre-normalized
-inputs never reached any configured model, so it cannot be used to compare
-providers or extraction models.
+The reported Aray normalization stage configured `glm-5.2:cloud` for normalization
+and judging. Its retained report does not record the endpoint, so it does not
+establish that the run used the local Ollama URL shown above. The stage's 416
+accepted outputs form a frozen handoff to artifact realization. Those
+pre-normalized inputs never reached any configured model during realization, so
+the second-stage controls cannot compare providers or extraction models. The two
+measurements isolate different stages of one Aray end-to-end lineage;
+normalization is not external preprocessing.
 
 When inference is actually required, the endpoint is local but the model is not:
 rule content is sent to Ollama Cloud. The `not-needed` placeholder supplied by
@@ -229,7 +233,7 @@ uv run aray rule.yar --scan-only
 ```
 
 - Linux rules produce `build/linux/app`, a minimal ELF64 scanner artifact.
-- PE rules produce `build/windows/app.exe`, a minimal PE32 or PE32+ scanner artifact selected from supported constraints.
+- PE rules produce `build/windows/app.exe`, a minimal PE64 scanner artifact.
 - Generic rules always produce `build/generic/output{ext}` without a compiler.
 
 Scan-only ELF and PE files are intended for YARA scanning and are not guaranteed to execute.
@@ -271,6 +275,9 @@ Batch tools additionally support TOML files:
 
 - `.evaluator` for `aray-eval`;
 - `.normalizer` for `aray-normalize`.
+
+Each batch CLI loads its corresponding file from the current directory when run
+without arguments. `--config PATH` selects a different file explicitly.
 
 Their precedence is `CLI > TOML > environment > built-in default`. A shared
 TOML model or endpoint overrides role-specific environment variables, while a

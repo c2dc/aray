@@ -20,6 +20,7 @@ from aray.normalizer import (
     _print_summary,
     _run_one,
     _write_report,
+    main as normalizer_main,
     parse_args,
     run_normalization,
 )
@@ -187,6 +188,9 @@ class TestNormalizeRulePrompt:
         assert "Remove $x1, the MZ check, and the filesize bound" in sys_content
         assert "52006F006F007400200045006E007400720079" in sys_content
         assert "Do NOT decode or reinterpret hex-looking regex text" in sys_content
+        assert "positional assertions" in sys_content
+        assert "Prefer an unanchored alternative" in sys_content
+        assert "condition preserves `$name at 0`" in sys_content
 
     def test_retry_includes_expensive_branch_feedback(self):
         original = (
@@ -884,14 +888,26 @@ class TestPrintSummary:
 
 
 class TestParseArgs:
-    def test_no_arguments_prints_help_and_exits_zero(self, capsys):
-        with pytest.raises(SystemExit) as excinfo:
-            parse_args([])
+    def test_no_arguments_uses_default_config(self, capsys):
+        args = parse_args([])
 
-        captured = capsys.readouterr()
-        assert excinfo.value.code == 0
-        assert "usage: aray-normalize" in captured.out
-        assert captured.err == ""
+        assert args.config == Path(".normalizer")
+        assert args.dirs == []
+        assert capsys.readouterr().out == ""
+
+    def test_main_loads_normalizer_from_current_directory(
+        self, tmp_path, monkeypatch, capsys
+    ):
+        (tmp_path / "rules").mkdir()
+        (tmp_path / ".normalizer").write_text(
+            '[normalizer]\ndirectories = ["rules"]\n'
+        )
+        monkeypatch.chdir(tmp_path)
+        monkeypatch.setattr("sys.argv", ["aray-normalize"])
+
+        normalizer_main()
+
+        assert "No .yar files found." in capsys.readouterr().out
 
     def test_accepts_file_path(self):
         args = parse_args(["rule.yar"])

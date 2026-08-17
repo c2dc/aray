@@ -39,9 +39,10 @@ python main.py data/rules/rule0.yar --scan-only   # Linux → minimal ELF64
 python main.py data/rules/rule6.yar --scan-only   # PE rule → minimal PE64
 
 # Normalize files or directories and assess quality with an LLM judge
+uv run aray-eval                                # loads .evaluator from cwd
 python normalize.py evaluation/rules/cve_rules/example.yar
 python normalize.py evaluation/rules/cve_rules --output /tmp/norm_report.json
-python normalize.py --config .normalizer          # uses [normalizer] section
+python normalize.py                               # loads .normalizer from cwd
 uv run aray-normalize evaluation/rules/cve_rules  # via installed script
 
 # Run tests — unit + integration (no LLM calls, ~4 s). The real-LLM e2e tests
@@ -70,6 +71,7 @@ uv run pytest -m llm -v
   - `nodes.py` — `read_yara_rule`, `check_normalization_needed`, `normalize_rule`, `judge_rule`, `fail_normalization`, `extract_strings`, `extract_constants`, `route_file_type`, `write_generic`, plus helpers `_requires_normalization` and `_judge_normalization`.
   - `graph.py` — `build_graph()` and `save_graph_png()`. `build_graph()` accepts a `PipelineConfig` (or `None` for defaults) and constructs separate `ChatOpenAI` instances for the `normalize` and `extract` roles; node functions receive `llm` and `use_structured` via `functools.partial`.
   - `normalizer.py` — Batch normalization evaluator: accepts YARA files or recursively walks directories, calls only the `normalize_rule` node per rule (no extraction/compilation), writes each normalized rule to the output root (mirroring directory inputs), uses an LLM-as-judge to assess semantic correctness, and writes a JSON report. Used by `normalize.py` and the `aray-normalize` script.
+  - `evaluator.py` — Batch synthesis and YARA validation. The default oracle scans the generated artifact with `normalized_rule.yar`; `--validate-original` instead associates source rules by filename, trailing directory path, and first public rule name, selects a standalone dependency closure, and restricts YARA to that identifier. Original roots are configured with repeatable `--original-directory` options or `[evaluator] original_directories`.
 
 The pipeline uses a LangGraph StateGraph with the following flow:
 

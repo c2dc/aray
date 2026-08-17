@@ -1,21 +1,69 @@
 {
-  "schema_version": 1,
-  "recorded_at": "2026-08-15",
-  "claim": "The pre-normalized 416-rule corpus used no LLM during normalization or extraction; every rule that reached extraction was handled deterministically.",
+  "schema_version": 3,
+  "recorded_at": "2026-08-17",
+  "claim": "Aray was evaluated end to end in two stages connected by a frozen handoff: its normalization workflow accepted all 416 selected source entries, all final original-derivative pairs passed the supported deterministic checks, and all 406 entries admitted by preflight produced artifacts matching their upstream original rules.",
+  "evaluation_design": {
+    "type": "staged_end_to_end_with_frozen_handoff",
+    "lineage": "public source file -> Aray source reduction and normalization -> deterministic normalized-rule validation -> frozen accepted predicate -> preflight -> extraction -> realization -> upstream-original YARA scan",
+    "acceptance_oracle": "Identifier-restricted YARA match against the derivative-independent upstream original rule",
+    "source_association": "matching filename, trailing directory path, and first public rule identifier; missing or ambiguous associations fail explicitly",
+    "scope_note": "The original-rule oracle independently validates each concrete artifact against a different predicate, but shares Aray's source-selection and dependency-closure machinery and the same YARA implementation. Its independence is predicate-level, not implementation-level, and it does not prove universal implication."
+  },
   "corpus": {
     "source": "https://github.com/Yara-Rules/rules",
     "source_commit": "0f93570194a80d2f2032869055808b0ddcdfb360",
     "local_path": "evaluation/normalized-glm-5.2-stable",
+    "local_path_role": "frozen handoff from Aray normalization to deterministic realization",
+    "frozen_corpus_is_versioned": false,
+    "availability_note": "The repository versions this aggregate summary and digest, not the frozen corpus or canonical per-rule reports.",
     "rule_count": 416,
-    "sha256_of_sorted_file_hash_manifest": "3dc8ccb0fa1ad2b538b3d08f7a43af66cee4a300d0e7f3d5149568c2299621cc",
+    "sha256_of_sorted_file_hash_manifest": "2b7d09de6a0f152218a471ad018dd50fe9af4a4aae08d5ac7fccfa9cd2cb985d",
     "digest_command": "rg --files evaluation/normalized-glm-5.2-stable -g '*.yar' -0 | sort -z | xargs -0 sha256sum | sha256sum"
   },
+  "normalization_stage": {
+    "owner": "Aray",
+    "interface": "aray-normalize",
+    "implementation": "Aray source selection, aray.nodes.normalize_rule, deterministic canonicalization and candidate validation, contextual regex witness checks, and batch-only passed-verdict admission",
+    "configuration": {
+      "normalize_model": "glm-5.2:cloud",
+      "judge_model": "glm-5.2:cloud",
+      "workers": 1
+    },
+    "result": {
+      "source_entries": 416,
+      "accepted": 416,
+      "failed": 0,
+      "accepted_without_model_normalization": 182,
+      "accepted_after_model_normalization": 234,
+      "admission_rate_percent": 100.0
+    },
+    "evidence": {
+      "report_path": "evaluation/reports/2026-08-12T19-30-54-glm-5.2/norm_report.json",
+      "report_is_versioned": false,
+      "scope_note": "This report records the initial normalization stage and predates the two anchored-regex repairs applied before the final freeze."
+    }
+  },
+  "normalized_rule_validation": {
+    "implementation": "yara-python compilation, selected-rule identity, retained declarations and modifiers, supported count expansions, fixed witnesses derived from regex and hex declarations, and a narrow deterministic proof for supported conjunction/count transformations",
+    "validated_at": "2026-08-17",
+    "validation_method": "Pair each final frozen derivative with its selected upstream original and invoke aray.yara_validation.validate_normalization.",
+    "final_original_derivative_pairs": 416,
+    "passed_supported_deterministic_checks": 416,
+    "pairwise_report_is_versioned": false,
+    "fully_proven_by_narrow_implication_fragment_not_reported": true,
+    "universal_implication_claimed": false,
+    "regressions_repaired_before_final_run": [
+      "MALW_AlMashreq",
+      "RAT_PoetRATDoc"
+    ]
+  },
   "canonical_validation": {
-    "command": "uv run aray-eval --config .evaluator --model deterministic-control --base-url http://127.0.0.1:9/v1 --workers 1 --output /tmp/opencode/aray-deterministic-report.json",
+    "command": "uv run aray-eval --model deterministic-control --base-url http://127.0.0.1:9/v1 --validate-original --original-directory evaluation/yara-repos/rules --workers 1 --output /tmp/aray-original-deterministic-control.json",
     "mode": "full_compile",
     "scan_only": false,
     "workers": 1,
-    "duration_seconds": 12.806,
+    "duration_seconds": 11.418,
+    "canonical_per_rule_report_is_versioned": false,
     "model_control": {
       "configured_model": "deterministic-control",
       "base_url": "http://127.0.0.1:9/v1",
@@ -29,13 +77,18 @@
       "yara"
     ],
     "result": {
-      "matched": 406,
+      "upstream_original_matched": 406,
       "unsupported": 7,
       "infeasible": 2,
       "unsatisfiable": 1,
-      "unexplained_mismatch": 0,
+      "yara_mismatch": 0,
       "construction_failed": 0,
-      "success_rate_percent": 97.6
+      "positive_fixture_yield_percent": 97.6,
+      "artifact_routes": {
+        "elf": 258,
+        "pe": 101,
+        "generic": 47
+      }
     },
     "processing_paths": {
       "normalization": {
@@ -53,33 +106,45 @@
       },
       "llm_usage": {
         "rules_using_llm": 0,
-        "rules_without_llm": 416
+        "rules_without_llm": 416,
+        "scope": "deterministic realization stage only"
       }
     }
   },
+  "end_to_end_result": {
+    "source_entries_processed": 416,
+    "terminal_dispositions": 416,
+    "upstream_original_matching_artifacts": 406,
+    "positive_fixture_yield_percent": 97.6,
+    "conditional_realization": "406/406",
+    "preflight_dispositions": 10
+  },
+  "configuration_cross_checks_scope": "Historical realization-stage controls used the normalized predicate oracle and are not evidence for the final upstream-original claim.",
   "configuration_cross_checks": [
     {
       "configured_extract_model": "glm-5.2:cloud",
       "matched": 406,
-      "failed": 10,
+      "preflight_dispositions": 10,
       "llm_invoked": false
     },
     {
       "configured_extract_model": "qwen3.5:4b",
       "matched": 406,
-      "failed": 10,
+      "preflight_dispositions": 10,
       "llm_invoked": false
     },
     {
-      "configured_extract_model": "phi-4:14b",
+      "configured_extract_model_family": "Phi-4",
+      "configured_extract_model_identifier": null,
+      "identifier_retained": false,
       "matched": 406,
-      "failed": 10,
+      "preflight_dispositions": 10,
       "llm_invoked": false
     },
     {
       "configured_extract_model": "gpt-4.1",
       "matched": 406,
-      "failed": 10,
+      "preflight_dispositions": 10,
       "llm_invoked": false
     }
   ],
@@ -103,19 +168,22 @@
   },
   "interpretation": {
     "measures": [
+      "Aray normalization admission and path",
       "deterministic YARA constraint extraction",
       "capability preflight",
       "artifact construction",
       "compiler and linker behavior",
-      "final YARA matching"
+      "deterministic normalized-rule validation",
+      "final YARA matching against associated upstream original rules"
     ],
     "does_not_measure": [
       "LLM extraction quality",
       "LLM latency",
       "LLM cost",
       "provider performance",
-      "normalization quality"
+      "universal semantic implication of normalized predicates to upstream source rules",
+      "coverage of arbitrary YARA"
     ],
-    "note": "The four model names above were inactive configuration controls, not model benchmarks. The normalization experiments are maintained separately."
+    "note": "The four model names above were inactive controls in the realization stage, not model benchmarks. Model use occurred in the preceding Aray normalization stage for 234 entries. Two anchored-regex mismatches observed before the final run were repaired and retained as validator regressions, so the reported result is post-fix rather than held out."
   }
 }

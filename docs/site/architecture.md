@@ -239,7 +239,7 @@ Runnable PE data cannot generally occupy offsets inside headers or code, typical
 
 - a DOS header with `MZ` and `e_lfanew`;
 - a PE signature;
-- a PE32 or PE32+ COFF/optional header selected from supported constraints;
+- a PE64 COFF/optional header;
 - strings and supported constants at their assigned offsets.
 
 The artifact is scanner-oriented, not a runnable replacement for MinGW output.
@@ -277,7 +277,7 @@ Internal checks include:
 - subprocess failure propagation through `check=True`;
 - bounds and collision checks in layout helpers.
 
-The normal `aray` CLI does not run YARA after construction. This preserves separation between construction and acceptance testing. Use the YARA CLI manually or `aray-eval`, which treats an actual YARA match as the end-to-end success criterion.
+The normal `aray` CLI does not run YARA after construction. This preserves separation between construction and acceptance testing. Use the YARA CLI manually or `aray-eval`, which scans the generated artifact against the Aray-accepted normalized rule by default. `--validate-original` switches to the strictly associated upstream source rule. In the published staged evaluation, an identifier-restricted match against the associated upstream source rule is the operational end-to-end success criterion; it validates each concrete artifact but is not a universal proof of implication between predicates.
 
 ## Source Map
 

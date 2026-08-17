@@ -539,11 +539,7 @@ def parse_args(argv: list[str] | None = None) -> argparse.Namespace:
         default=False,
         help="Disable streaming on all LLM calls.",
     )
-    args_to_parse = sys.argv[1:] if argv is None else argv
-    if not args_to_parse:
-        parser.print_help()
-        raise SystemExit(0)
-    return parser.parse_args(args_to_parse)
+    return parser.parse_args(sys.argv[1:] if argv is None else argv)
 
 
 def main() -> None:

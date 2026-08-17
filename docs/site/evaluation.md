@@ -5,34 +5,51 @@ Aray includes two batch tools:
 - `aray-eval` runs the complete pipeline, invokes the real YARA CLI on each artifact, and records end-to-end matches.
 - `aray-normalize` evaluates only rule normalization and writes normalized rules to a mirrored directory tree.
 
-## Deterministic Corpus Validation
+The published study composes these Aray-owned tools as two sequential stages with
+a frozen handoff. This separates model-dependent normalization from deterministic
+realization for attribution, while preserving one lineage from public source files
+to terminal Aray dispositions.
 
-Aray's primary artifact validation uses 416 real-world rules from
+## Staged End-to-End Corpus Validation
+
+Aray's primary evaluation starts from 416 source files from
 [Yara-Rules/rules](https://github.com/Yara-Rules/rules), fixed at upstream commit
-`0f93570194a80d2f2032869055808b0ddcdfb360` and stored as a pre-normalized corpus.
+`0f93570194a80d2f2032869055808b0ddcdfb360`. `aray-normalize` first selects one
+standalone target from each source file and applies Aray's batch normalization
+and admission policy. Its exact accepted outputs are then frozen and passed to
+`aray-eval` for full-compile-mode realization.
 
-| Mode | Matches | Preflight dispositions | Rules using an LLM | Success rate |
-|---|---:|---:|---:|---:|
-| Full compile, 1 worker | 406 | 10 | **0** | **97.6%** |
+| Aray stage | Input | Result | Model-dependent path |
+|---|---:|---:|---:|
+| Normalization | 416 selected source entries | **416 accepted** | 234 normalized; 182 pass-through |
+| Full-compile mode, 1 worker | 416 frozen accepted outputs | **406 matches**, 10 preflight dispositions | **0** |
 
-This is a validation of the deterministic pipeline, not a model evaluation:
+Positive-fixture yield is 406/416 (97.6%), and conditional realization is
+406/406. All 416 entries reached a terminal Aray disposition. The end-to-end
+oracle is an identifier-restricted YARA match against each associated upstream
+original rule. This validates the concrete artifacts against a distinct source
+predicate but does not prove universal implication between predicates.
 
-- all 416 inputs were already normalized and skipped the normalization/judge loop;
+The frozen second stage isolates the deterministic pipeline; it is not a model
+evaluation:
+
+- all 416 inputs had already passed Aray normalization and therefore skipped the normalization/judge loop in this stage;
 - all 406 rules that passed capability preflight used deterministic string extraction;
 - the same 406 rules used deterministic constant extraction;
 - 10 rules stopped at preflight and never reached either extractor;
-- no rule used normalization or extraction LLM fallback.
+- no rule used normalization or extraction LLM fallback during realization.
 
 A canonical control run configured an intentionally unreachable endpoint at
 `127.0.0.1:9`; it still completed with 406 matches and telemetry reported
-`rules_using_llm=0`. Separate runs configured the extraction role as
-`glm-5.2:cloud`, `qwen3.5:4b`, `phi-4:14b`, and `gpt-4.1` and produced the same
+`rules_using_llm=0` for the realization stage. Separate runs configured the extraction role as
+GLM-5.2, Qwen 3.5, Phi-4, and GPT-4.1 and produced the same
 result without invoking those models. The names are inactive configuration
 cross-checks, not comparable model measurements.
 
 The [versioned machine-readable summary](assets/yara-rules-416-deterministic.json)
-records the corpus commit and digest, execution mode, processing paths, result,
-and failure set. Both x86-64 and i686 MinGW toolchains were installed.
+records both stages, the corpus commit and frozen digest, execution mode,
+processing paths, result, oracle, and failure set. Both x86-64 and i686 MinGW
+toolchains were installed.
 
 ### Dispositions and Failures
 
@@ -96,6 +113,9 @@ Useful options:
 | `--output PATH` | choose the JSON report path |
 | `--keep-artifacts` | preserve per-rule temporary builds |
 | `--scan-only` | avoid GCC and MinGW |
+| `--validate-original` | validate artifacts against associated upstream rules |
+| `--no-validate-original` | disable original-rule validation enabled by the config file |
+| `--original-directory PATH` | add an original corpus root; repeatable and overrides TOML roots |
 | `--model`, `--base-url` | shared model configuration |
 | role-specific model, URL, key, reasoning, and streaming flags | same semantics as `aray` |
 
@@ -103,6 +123,11 @@ Without `--output`, reports are written to `evaluation/reports/<timestamp>/eval_
 The CLI prints the report's absolute path after writing it. When
 `--keep-artifacts` is enabled, it also prints the absolute temporary directory
 preserved for each evaluated rule.
+
+Before processing each rule, the evaluator prints its oracle and provenance to
+stderr. The line includes `oracle=normalized` or `oracle=original`, the normalized
+input path, and the effective validation source path. An unavailable original
+association is shown as `source=<unavailable>` before the rule fails.
 
 Evaluation reports currently contain three top-level fields: `metadata`,
 `results`, and `summary`. Metadata records counts, aggregate duration, and the
@@ -117,13 +142,14 @@ because no matching artifact was produced.
 Each result records the rule path and name, status, error, duration, YARA output
 and return code, configured model names, normalization verdict/reason,
 disposition, failure category, normalization path, string/constant extraction
-paths, and whether an LLM was actually used. The summary aggregates
+paths, whether an LLM was actually used, `validation_source`, and the associated
+`validation_rule_path` when the original oracle is enabled. The summary aggregates
 `disposition_counts`, `failure_categories`, `processing_paths`, and `llm_usage`;
 reports do not embed artifacts.
 
-Calling `aray-eval` without arguments prints the standard help and exits with
-status `0`. To process paths from `.evaluator` without positional inputs, pass
-the configuration option explicitly: `aray-eval --config .evaluator`.
+Calling `aray-eval` without arguments automatically loads `.evaluator` from the
+current directory and processes its configured inputs. Use `--config PATH` to
+select another file; `aray-eval --help` displays the standard CLI help.
 
 ### Evaluator Configuration
 
@@ -135,6 +161,8 @@ directories = [
   "evaluation/yara-repos/rules/cve_rules",
   "evaluation/yara-repos/rules/malware",
 ]
+validate_original = true
+original_directories = ["evaluation/yara-repos/rules"]
 model = "gpt-4.1"
 base_url = "http://localhost:11434/v1"
 # normalize_model = "gpt-4.1"
@@ -156,25 +184,44 @@ directories replace the configured input list. Despite its legacy name, the
 TOML `directories` list also accepts individual `.yar` files. API keys are
 never printed or included in reports.
 
-Index files named `index.yar`, `*_index.yar`, or `index_*.yar`, and files beginning with an `include` directive, are skipped. Rulesets process only the first non-private rule, with reachable helpers inlined into one standalone rule. Every backend is scanned with that normalized rule rather than the original ruleset.
+By default, every backend is scanned with the selected normalized rule. Setting
+`validate_original = true` or passing `--validate-original` switches the YARA
+oracle to an associated upstream rule. Original roots come from
+`original_directories` or repeatable `--original-directory PATH` options. The
+association requires the same filename, at least the same parent-directory
+suffix, and the same first public rule name; the unique candidate with the
+longest path suffix wins. Missing, ambiguous, and name-mismatched associations
+fail explicitly without falling back to the normalized rule. The selected
+original rule is made standalone with its reachable dependencies and YARA is
+restricted to its identifier, so another rule in the source ruleset cannot make
+the evaluation pass.
+
+Index files named `index.yar`, `*_index.yar`, or `index_*.yar`, and files beginning with an `include` directive, are skipped. Rulesets process only the first non-private rule, with reachable helpers inlined into one standalone rule.
 
 ### Report Shape
 
 The `metadata` object contains `timestamp`, `total`, `passed`, `failed`,
 `skipped`, `duration_seconds`, and `config`. The `results` array contains one
-`EvalResult` object per processed rule. The `summary` object contains
+`EvalResult` object per processed rule, including the selected validation oracle
+and source path. The `summary` object contains
 `disposition_counts`, `failure_categories`, `processing_paths`, and `llm_usage`.
 This is the complete current report shape; consumers should not assume
 additional diagnostics or manifests.
 
 ## Normalization Evaluator
 
-`aray-normalize` runs normalization without extraction or artifact construction. It writes each normalized rule under an output tree that mirrors the input and asks a separate model to assess quality.
+`aray-normalize` is an Aray interface that shares source selection, normalization
+implementation, and deterministic candidate checks with the regular pipeline,
+without extraction or artifact construction. Its residual-judge admission is
+stricter: the batch retains only `passed` candidates, whereas the regular graph
+currently proceeds on `uncertain`. It writes each accepted rule under an output
+tree that mirrors the input.
 
 ### Preserved Normalization Results
 
-Normalization remains an explicitly model-dependent experiment and is reported
-separately from deterministic artifact validation:
+Normalization remains an explicitly model-dependent stage and is measured
+separately from deterministic artifact realization. The accepted GLM-5.2 outputs
+form the frozen handoff used by the staged end-to-end evaluation:
 
 | Run | Scope | Passed | Failed | Already normalized | Duration |
 |---|---:|---:|---:|---:|---:|
@@ -182,11 +229,15 @@ separately from deterministic artifact validation:
 | GPT-4.1 normalizer and judge | 416 | 407 | 9 | 182 | 14m 18.432s |
 | GPT-4.1 targeted failure retest | 21 | 17 | 4 | 0 | 2m 04.308s |
 
-The targeted retest is not directly comparable to either full-corpus run. The
-three raw normalization reports remain under `evaluation/reports/`, and the
-accepted GLM-5.2 corpus remains frozen under
-`evaluation/normalized-glm-5.2-stable`; previous artifact-pipeline experiments
-were removed.
+The targeted retest is not directly comparable to either full-corpus run. In the
+local evaluation workspace, three raw normalization reports remain under
+`evaluation/reports/`, and the accepted GLM-5.2 corpus remains frozen under
+`evaluation/normalized-glm-5.2-stable`. These files are ignored and are not
+available from a clean clone; the repository versions the aggregate summary and
+frozen-corpus digest, not the frozen files or canonical per-rule reports. In the
+published lineage, all 416 GLM-5.2 outputs were accepted: 182 without model
+normalization and 234 after model normalization. Previous artifact-pipeline
+experiments were removed.
 
 Normalize one file:
 
@@ -222,7 +273,7 @@ Useful options:
 | `--output PATH` | JSON quality report |
 | `--workers N` | parallel normalization workers |
 | `--model MODEL` | normalization model |
-| `--judge-model MODEL` | independent judge model |
+| `--judge-model MODEL` | separately configured residual judge model |
 | `--base-url URL` | normalization endpoint |
 | `--judge-base-url URL` | separate judge endpoint |
 | `--normalize-api-key KEY` | normalization credential |
@@ -251,9 +302,10 @@ The normalizer uses the same `CLI > TOML > environment > default` precedence.
 Its normalization settings fall back through `NORMALIZE_*`, then `OPENAI_*`.
 The legacy TOML `directories` list accepts both individual `.yar` files and
 directories.
-Calling `aray-normalize` without arguments prints the standard help and exits
-with status `0`. Use `aray-normalize --config .normalizer` to explicitly run
-only the inputs configured in TOML.
+Calling `aray-normalize` without arguments automatically loads `.normalizer`
+from the current directory and processes its configured inputs. Use
+`--config PATH` to select another file; `aray-normalize --help` displays the
+standard CLI help.
 Unless explicitly overridden, the judge inherits the effective normalization
 model, endpoint, and credential. API keys are not stored in reports.
 
@@ -264,7 +316,7 @@ any stale output for that rule after retries are exhausted.
 
 Retained regex replacements are validated deterministically with `yara-python` before the LLM judge runs. Judge criteria then include subset correctness, modifier preservation, YARA syntax, and construction cost:
 
-- `passed`: accepted as a valid constructible subset of the original;
+- `passed`: accepted by Aray's deterministic checks and residual judge as the intended constructible specialization;
 - `failed`: the rule is not a valid subset, has invalid syntax, or chooses a clearly more expensive branch when a cheaper constructible alternative exists;
 - `uncertain`: treated as a failed quality result by the batch normalizer.
 
@@ -306,13 +358,18 @@ end-to-end scenarios. Explicitly selecting `not llm` guarantees an offline run.
 
 ## Interpreting Results
 
-The current success rate uses a frozen, already-normalized corpus. Telemetry
-records zero rules using an LLM, deterministic extraction for all 406 rules that
-reached that stage, and 10 preflight terminations. It combines deterministic
-constructibility assessment, extraction, format routing and construction,
-full-compile toolchain behavior, and final acceptance by YARA. It does not
-measure normalization, extraction-model quality, latency, cost, or provider
-performance.
+The current success rate combines two Aray stages. The first records 416/416
+normalization admission, with 182 pass-through entries and 234 model-normalized
+entries. The second uses their frozen outputs; its telemetry records zero rules
+using an LLM, deterministic extraction for all 406 rules that reached that stage,
+and 10 preflight terminations. Together they cover source selection,
+normalization, constructibility assessment, extraction, format routing and
+construction, full-compile toolchain behavior, and final acceptance by YARA.
+
+This is operational end-to-end coverage under the associated upstream-original-rule
+oracle. It validates each concrete artifact against its source predicate but does
+not prove universal semantic implication, extraction-model quality, latency, cost,
+or provider performance.
 
 The results should not be read as full YARA-language coverage or as a guarantee
 that every artifact is executable. In particular, `pe.*` remains outside scope.

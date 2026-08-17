@@ -67,7 +67,7 @@
         <mxCell id="22" parent="1" style="rounded=1;whiteSpace=wrap;html=1;fillColor=#EFF6FF;strokeColor=#93C5FD;fontColor=#1E40AF;fontSize=11;align=left;spacingLeft=10;spacingRight=8;" value="&lt;b&gt;Shared state:&lt;/b&gt;&lt;br&gt;rules • constructibility • strings • constants • type • judge history" vertex="1">
           <mxGeometry height="42" width="400" x="180" y="426" as="geometry" />
         </mxCell>
-        <mxCell id="23" parent="1" style="rounded=1;whiteSpace=wrap;html=1;align=left;verticalAlign=middle;spacingLeft=10;spacingRight=8;fillColor=#ECFDF5;strokeColor=#22C55E;fontColor=#14532D;fontSize=10;fontStyle=0;" value="&lt;b&gt;PE / Windows&lt;/b&gt;&lt;br&gt;&lt;br&gt;Full: main.c → MinGW x86_64/i686&lt;br&gt;offsets: two passes + .oray&lt;br&gt;scan-only: PE32/PE32+ writer&lt;br&gt;→ build/windows/app.exe" vertex="1">
+        <mxCell id="23" parent="1" style="rounded=1;whiteSpace=wrap;html=1;align=left;verticalAlign=middle;spacingLeft=10;spacingRight=8;fillColor=#ECFDF5;strokeColor=#22C55E;fontColor=#14532D;fontSize=10;fontStyle=0;" value="&lt;b&gt;PE / Windows&lt;/b&gt;&lt;br&gt;&lt;br&gt;Full: main.c → MinGW x86_64/i686&lt;br&gt;offsets: two passes + .oray&lt;br&gt;scan-only: PE64 writer&lt;br&gt;→ build/windows/app.exe" vertex="1">
           <mxGeometry height="120" width="175" x="665" y="108" as="geometry" />
         </mxCell>
         <mxCell id="24" parent="1" style="rounded=1;whiteSpace=wrap;html=1;align=left;verticalAlign=middle;spacingLeft=10;spacingRight=8;fillColor=#ECFDF5;strokeColor=#22C55E;fontColor=#14532D;fontSize=10;fontStyle=0;" value="&lt;b&gt;ELF / Linux&lt;/b&gt;&lt;br&gt;&lt;br&gt;Full: main.S + linker.ld&lt;br&gt;→ static gcc/GNU ld&lt;br&gt;scan-only: ELF64 writer&lt;br&gt;→ build/linux/app" vertex="1">

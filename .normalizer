@@ -37,8 +37,8 @@ output_root = "evaluation/normalized-glm-5.2"
 # judge_api_key = "sk-..."
 
 # Runtime and report controls.
-# Run `aray-normalize --config .normalizer` to use this input list without
-# positional paths; a completely argument-free invocation only prints CLI help.
+# Run `aray-normalize` without positional paths to load this file automatically
+# from the current directory. Use `--config PATH` for another config file.
 # no_stream = false
 # workers = 1                    # parallel normalization requests
 # output = "norm_report.json"   # default: timestamped evaluation/reports path

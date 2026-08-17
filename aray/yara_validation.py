@@ -158,6 +158,41 @@ def _candidate_encodings(data: bytes, modifiers: set[str]) -> list[bytes]:
     return [data, wide] if "ascii" in modifiers else [wide]
 
 
+def _required_exact_offset(rule_text: str, name: str) -> int | None:
+    """Return an exact offset required as a top-level conjunction term."""
+    condition = _masked_code(_condition(rule_text))
+    placement = re.compile(
+        rf"{re.escape(name)}\s+at\s+(0[xX][0-9A-Fa-f]+|\d+)",
+        re.IGNORECASE,
+    )
+    for term in _top_level_and_terms(condition):
+        match = placement.fullmatch(_strip_outer_parentheses(term).strip())
+        if match:
+            value = match.group(1)
+            return int(value, 16 if value.lower().startswith("0x") else 10)
+    return None
+
+
+def _regex_witness_contexts(
+    data: bytes, exact_offset: int | None
+) -> list[tuple[bytes, int]]:
+    """Return boundary contexts in which the normalized literal may match."""
+    guards = (b"!", b"A")
+    if exact_offset == 0:
+        prefixes = (b"",)
+    elif exact_offset is None:
+        prefixes = (b"", *guards)
+    else:
+        # Regex anchors distinguish offset zero from non-zero, not the exact value.
+        prefixes = guards
+    suffixes = (b"", *guards)
+    return [
+        (prefix + data + suffix, len(prefix))
+        for prefix in prefixes
+        for suffix in suffixes
+    ]
+
+
 def _validate_regex_replacements(original: str, normalized: str) -> str | None:
     try:
         import yara
@@ -180,24 +215,38 @@ def _validate_regex_replacements(original: str, normalized: str) -> str | None:
                 f"Regex witness validation failed for {name}: replace it with a fixed, "
                 "non-empty ASCII or hex literal accepted by the original regex."
             )
-        modifier_text = " ".join(sorted(modifiers))
-        source = (
-            "rule aray_regex_witness { strings: "
-            f"$w = {regex_source} {modifier_text} condition: $w }}"
-        )
+        original_modifier_text = " ".join(sorted(modifiers))
+        candidate_modifier_text = " ".join(sorted(candidate_modifiers))
+        exact_offset = _required_exact_offset(normalized, name)
         try:
-            compiled = yara.compile(source=source)
-            matched = any(
-                compiled.match(data=data, timeout=1)
-                for data in _candidate_encodings(candidate, candidate_modifiers)
-            )
+            compiled_by_offset = {}
+            counterexample = False
+            for encoded in _candidate_encodings(candidate, candidate_modifiers):
+                for data, offset in _regex_witness_contexts(encoded, exact_offset):
+                    compiled = compiled_by_offset.get(offset)
+                    if compiled is None:
+                        source = (
+                            "rule aray_regex_witness { strings: "
+                            f"$original = {regex_source} {original_modifier_text} "
+                            f"$candidate = {candidate_source} {candidate_modifier_text} "
+                            "condition: "
+                            f"($candidate at {offset}) and not ($original at {offset}) }}"
+                        )
+                        compiled = yara.compile(source=source)
+                        compiled_by_offset[offset] = compiled
+                    if compiled.match(data=data, timeout=1):
+                        counterexample = True
+                        break
+                if counterexample:
+                    break
         except yara.Error:
             return None
-        if not matched:
+        if counterexample:
             return (
                 f"Regex witness validation failed for {name}: {candidate_source} does not "
-                "match the original YARA regex. Derive a fixed literal by taking zero "
-                "optional repetitions and the minimum required repetitions."
+                "match the original YARA regex in every placement allowed by the normalized "
+                "condition. Choose a non-anchored alternative, preserve a required `at 0` "
+                "constraint, or select a different string witness."
             )
     return None
 

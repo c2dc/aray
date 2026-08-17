@@ -4,7 +4,7 @@ build-backend = "hatchling.build"
 
 [project]
 name = "aray"
-version = "0.9.0"
+version = "0.10.0"
 description = "Generate benign files that match YARA rules for security testing"
 requires-python = ">=3.12"
 license = "Apache-2.0"

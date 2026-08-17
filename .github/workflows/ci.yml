@@ -26,6 +26,13 @@ jobs:
       - name: Check out repository
         uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7.0.1
 
+      - name: Check out Yara-Rules test corpus
+        uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7.0.1
+        with:
+          repository: Yara-Rules/rules
+          ref: 0f93570194a80d2f2032869055808b0ddcdfb360
+          path: evaluation/yara-repos/rules
+
       - name: Install uv and Python
         uses: astral-sh/setup-uv@c771a70e6277c0a99b617c7a806ffedaca235ff9 # v9.0.0
         with:
@@ -35,7 +42,7 @@ jobs:
       - name: Install native test dependencies
         run: |
           sudo apt-get update
-          sudo apt-get install --yes binutils gcc gcc-mingw-w64-x86-64 yara
+          sudo apt-get install --yes binutils gcc gcc-mingw-w64-i686 gcc-mingw-w64-x86-64 yara
 
       - name: Install project dependencies
         run: uv sync --locked --all-groups

@@ -27,6 +27,7 @@ from aray.graph import build_graph
 from aray.yara_source import (
     extract_first_rule_name as _extract_first_rule_name,
     extract_first_rule_text as _extract_first_rule_text,
+    select_yara_file,
 )
 
 
@@ -53,6 +54,8 @@ class EvalResult:
     strings_extraction_source: str = "not_reached"
     constants_extraction_source: str = "not_reached"
     llm_used: bool = False
+    validation_source: Literal["normalized", "original"] = "normalized"
+    validation_rule_path: str | None = None
 
     def to_dict(self) -> dict:
         return asdict(self)
@@ -61,6 +64,8 @@ class EvalResult:
 @dataclass
 class EvalConfig:
     directories: list[str]
+    original_directories: list[str] = field(default_factory=list)
+    validate_original: bool = False
     model: str = "gpt-4.1"
     normalize_model: str | None = None
     extract_model: str | None = None
@@ -79,6 +84,13 @@ class EvalConfig:
     workers: int = 1
     output: str | None = None
     keep_artifacts: bool = False
+
+
+@dataclass(frozen=True)
+class OriginalRuleAssociation:
+    path: Path | None = None
+    error: str | None = None
+    failure_category: str | None = None
 
 
 # ---------------------------------------------------------------------------
@@ -120,14 +132,98 @@ def _find_yar_files(paths: list[str | Path]) -> list[Path]:
     return sorted(found)
 
 
+def _common_path_suffix_length(left: Path, right: Path) -> int:
+    """Return the number of identical trailing path components."""
+    count = 0
+    for left_part, right_part in zip(reversed(left.parts), reversed(right.parts)):
+        if left_part != right_part:
+            break
+        count += 1
+    return count
+
+
+def _associate_original_rules(
+    rule_paths: list[Path], original_paths: list[Path]
+) -> dict[Path, OriginalRuleAssociation]:
+    """Associate normalized inputs with originals by path suffix and rule name."""
+    original_names: dict[Path, str | None] = {}
+    for original_path in original_paths:
+        try:
+            original_names[original_path] = _extract_first_rule_name(
+                original_path.read_text(errors="replace")
+            )
+        except OSError:
+            original_names[original_path] = None
+
+    associations: dict[Path, OriginalRuleAssociation] = {}
+    for rule_path in rule_paths:
+        try:
+            rule_name = _extract_first_rule_name(
+                rule_path.read_text(errors="replace")
+            )
+        except OSError:
+            rule_name = None
+
+        path_candidates = [
+            (candidate, _common_path_suffix_length(rule_path, candidate))
+            for candidate in original_paths
+            if candidate.name == rule_path.name
+            and _common_path_suffix_length(rule_path, candidate) >= 2
+        ]
+        if not path_candidates:
+            associations[rule_path] = OriginalRuleAssociation(
+                error=(
+                    f"No original rule matches the path suffix for {rule_path}"
+                ),
+                failure_category="original_rule_not_found",
+            )
+            continue
+
+        named_candidates = [
+            (candidate, score)
+            for candidate, score in path_candidates
+            if rule_name is not None and original_names[candidate] == rule_name
+        ]
+        if not named_candidates:
+            associations[rule_path] = OriginalRuleAssociation(
+                error=(
+                    f"Original path candidates for {rule_path} do not contain "
+                    f"the public rule {rule_name!r}"
+                ),
+                failure_category="original_rule_name_mismatch",
+            )
+            continue
+
+        best_score = max(score for _candidate, score in named_candidates)
+        best = [
+            candidate for candidate, score in named_candidates if score == best_score
+        ]
+        if len(best) != 1:
+            candidates = ", ".join(str(path) for path in best)
+            associations[rule_path] = OriginalRuleAssociation(
+                error=f"Ambiguous original rule for {rule_path}: {candidates}",
+                failure_category="original_rule_ambiguous",
+            )
+            continue
+        associations[rule_path] = OriginalRuleAssociation(path=best[0])
+
+    return associations
+
+
 # ---------------------------------------------------------------------------
 # YARA scan helper
 # ---------------------------------------------------------------------------
 
-def _yara_scan(rule_path: Path, binary: Path) -> tuple[int, str, str]:
+def _yara_scan(
+    rule_path: Path, binary: Path, identifier: str | None = None
+) -> tuple[int, str, str]:
     """Run ``yara <rule_path> <binary>`` and return (returncode, stdout, stderr)."""
+    command = ["yara"]
+    if identifier is not None:
+        command.extend(["-i", identifier])
+    command.extend([str(rule_path), str(binary)])
     result = subprocess.run(
-        ["yara", str(rule_path), str(binary)],
+        command,
         capture_output=True,
         text=True,
     )
@@ -177,7 +273,11 @@ def _execution_provenance(final_state: dict | None) -> dict:
     }
 
 
-def _run_one(rule_path: Path, eval_cfg: EvalConfig) -> EvalResult:
+def _run_one(
+    rule_path: Path,
+    eval_cfg: EvalConfig,
+    original_association: OriginalRuleAssociation | None = None,
+) -> EvalResult:
     """Run the full aray pipeline on *rule_path* and return an EvalResult."""
     import time
 
@@ -188,6 +288,9 @@ def _run_one(rule_path: Path, eval_cfg: EvalConfig) -> EvalResult:
         pass
     normalize_model = eval_cfg.normalize_model or eval_cfg.model
     extract_model = eval_cfg.extract_model or eval_cfg.model
+    validation_source: Literal["normalized", "original"] = (
+        "original" if eval_cfg.validate_original else "normalized"
+    )
     try:
         rule_name = _extract_first_rule_name(rule_text)
     except Exception as exc:  # noqa: BLE001
@@ -201,6 +304,7 @@ def _run_one(rule_path: Path, eval_cfg: EvalConfig) -> EvalResult:
             yara_returncode=None,
             normalize_model=normalize_model,
             extract_model=extract_model,
+            validation_source=validation_source,
         )
 
     # Skip index files immediately (belt-and-suspenders in case caller missed it)
@@ -216,6 +320,7 @@ def _run_one(rule_path: Path, eval_cfg: EvalConfig) -> EvalResult:
             yara_returncode=None,
             normalize_model=normalize_model,
             extract_model=extract_model,
+            validation_source=validation_source,
         )
     if rule_name is None:
         return EvalResult(
@@ -228,7 +333,70 @@ def _run_one(rule_path: Path, eval_cfg: EvalConfig) -> EvalResult:
             yara_returncode=None,
             normalize_model=normalize_model,
             extract_model=extract_model,
+            validation_source=validation_source,
         )
+
+    original_rule_path: Path | None = None
+    original_rule_text: str | None = None
+    if eval_cfg.validate_original:
+        association = original_association or OriginalRuleAssociation(
+            error=f"No original rule association was provided for {rule_path}",
+            failure_category="original_rule_not_found",
+        )
+        if association.error or association.path is None:
+            return EvalResult(
+                rule_path=str(rule_path),
+                rule_name=rule_name,
+                status="failed",
+                error=association.error,
+                duration_seconds=0.0,
+                yara_stdout=None,
+                yara_returncode=None,
+                normalize_model=normalize_model,
+                extract_model=extract_model,
+                disposition="validation_rule_unavailable",
+                failure_category=association.failure_category,
+                validation_source=validation_source,
+            )
+        original_rule_path = association.path
+        try:
+            selected_original = select_yara_file(original_rule_path)
+        except Exception as exc:  # noqa: BLE001
+            return EvalResult(
+                rule_path=str(rule_path),
+                rule_name=rule_name,
+                status="failed",
+                error=f"Unable to select original rule {original_rule_path}: {exc}",
+                duration_seconds=0.0,
+                yara_stdout=None,
+                yara_returncode=None,
+                normalize_model=normalize_model,
+                extract_model=extract_model,
+                disposition="validation_rule_unavailable",
+                failure_category="original_rule_invalid",
+                validation_source=validation_source,
+                validation_rule_path=str(original_rule_path),
+            )
+        if selected_original.name != rule_name:
+            return EvalResult(
+                rule_path=str(rule_path),
+                rule_name=rule_name,
+                status="failed",
+                error=(
+                    f"Original rule name mismatch for {original_rule_path}: "
+                    f"expected {rule_name!r}, got {selected_original.name!r}"
+                ),
+                duration_seconds=0.0,
+                yara_stdout=None,
+                yara_returncode=None,
+                normalize_model=normalize_model,
+                extract_model=extract_model,
+                disposition="validation_rule_unavailable",
+                failure_category="original_rule_name_mismatch",
+                validation_source=validation_source,
+                validation_rule_path=str(original_rule_path),
+            )
+        original_rule_text = selected_original.text
 
     tmpdir = Path(tempfile.mkdtemp(prefix="aray_eval_"))
     linux_dir = tmpdir / "linux"
@@ -236,6 +404,13 @@ def _run_one(rule_path: Path, eval_cfg: EvalConfig) -> EvalResult:
     generic_dir = tmpdir / "generic"
 
     t0 = time.monotonic()
+    final_state = None
+    validation_fields = {
+        "validation_source": validation_source,
+        "validation_rule_path": (
+            str(original_rule_path) if original_rule_path is not None else None
+        ),
+    }
     try:
         base_url = eval_cfg.base_url
         normalize_base_url = eval_cfg.normalize_base_url or base_url
@@ -257,7 +432,6 @@ def _run_one(rule_path: Path, eval_cfg: EvalConfig) -> EvalResult:
             streaming=eval_cfg.streaming,
         )
 
-        final_state = None
         with _RUN_LOCK:
             with (
                 patch("aray.compiler.BUILD_DIR", linux_dir),
@@ -286,6 +460,7 @@ def _run_one(rule_path: Path, eval_cfg: EvalConfig) -> EvalResult:
                 disposition="normalization_failed",
                 failure_category="normalization",
                 **_execution_provenance(final_state),
+                **validation_fields,
             )
 
         construction_error = (final_state or {}).get("construction_error")
@@ -307,19 +482,18 @@ def _run_one(rule_path: Path, eval_cfg: EvalConfig) -> EvalResult:
                 disposition=disposition,
                 failure_category=(final_state or {}).get("constructibility_code"),
                 **_execution_provenance(final_state),
+                **validation_fields,
             )
 
-        # Detect the produced binary and always scan the selected standalone
-        # normalized rule. A later rule from the input ruleset must never make
-        # evaluation pass.
+        # Detect the produced binary and its generated normalized rule.
         binary: Path | None = None
-        scan_rule: Path | None = None
+        normalized_scan_rule: Path | None = None
         if (windows_dir / "app.exe").exists():
             binary = windows_dir / "app.exe"
-            scan_rule = windows_dir / "normalized_rule.yar"
+            normalized_scan_rule = windows_dir / "normalized_rule.yar"
         elif (linux_dir / "app").exists():
             binary = linux_dir / "app"
-            scan_rule = linux_dir / "normalized_rule.yar"
+            normalized_scan_rule = linux_dir / "normalized_rule.yar"
         else:
             # Generic artifact — find the first output.* file written by write_generic
             for f in sorted(generic_dir.glob("output*")):
@@ -327,21 +501,36 @@ def _run_one(rule_path: Path, eval_cfg: EvalConfig) -> EvalResult:
                     binary = f
                     break
             if binary is not None:
-                scan_rule = generic_dir / "normalized_rule.yar"
+                normalized_scan_rule = generic_dir / "normalized_rule.yar"
 
         if binary is None:
             raise FileNotFoundError("No binary produced by pipeline")
-        if scan_rule is None or not scan_rule.exists():
+        if normalized_scan_rule is None or not normalized_scan_rule.exists():
             raise FileNotFoundError("No normalized rule produced by pipeline")
 
-        rc, stdout, _stderr = _yara_scan(scan_rule, binary)
+        scan_rule = normalized_scan_rule
+        identifier = None
+        if original_rule_text is not None:
+            scan_rule = tmpdir / "original_rule.yar"
+            scan_rule.write_text(original_rule_text)
+            identifier = rule_name
+
+        if identifier is None:
+            rc, stdout, stderr = _yara_scan(scan_rule, binary)
+        else:
+            rc, stdout, stderr = _yara_scan(scan_rule, binary, identifier)
         passed = rc == 0 and _has_yara_match(stdout)
+        original_scan_error = validation_source == "original" and rc != 0
         duration = time.monotonic() - t0
         return EvalResult(
             rule_path=str(rule_path),
             rule_name=rule_name,
             status="passed" if passed else "failed",
-            error=None if passed else f"YARA mismatch: rc={rc} stdout={stdout!r}",
+            error=(
+                None
+                if passed
+                else f"YARA mismatch: rc={rc} stdout={stdout!r} stderr={stderr!r}"
+            ),
             duration_seconds=round(duration, 3),
             yara_stdout=stdout,
             yara_returncode=rc,
@@ -349,9 +538,26 @@ def _run_one(rule_path: Path, eval_cfg: EvalConfig) -> EvalResult:
             extract_model=extract_model,
             normalize_verdict=(final_state or {}).get("judge_verdict") or None,
             normalize_reason=(final_state or {}).get("judge_reason") or None,
-            disposition="matched" if passed else "unexplained_mismatch",
-            failure_category=None if passed else "yara_mismatch",
+            disposition=(
+                "matched"
+                if passed
+                else (
+                    "validation_rule_unavailable"
+                    if original_scan_error
+                    else "unexplained_mismatch"
+                )
+            ),
+            failure_category=(
+                None
+                if passed
+                else (
+                    "original_rule_scan_error"
+                    if original_scan_error
+                    else "yara_mismatch"
+                )
+            ),
             **_execution_provenance(final_state),
+            **validation_fields,
         )
 
     except Exception as exc:  # noqa: BLE001
@@ -369,6 +575,7 @@ def _run_one(rule_path: Path, eval_cfg: EvalConfig) -> EvalResult:
             disposition="construction_failed",
             failure_category="pipeline_exception",
             **_execution_provenance(final_state),
+            **validation_fields,
         )
     finally:
         if not eval_cfg.keep_artifacts:
@@ -385,12 +592,30 @@ def run_evaluation(rule_paths: list[Path], eval_cfg: EvalConfig) -> list[EvalRes
     """Evaluate *rule_paths* and return results, printing progress to stderr."""
     total = len(rule_paths)
     results: list[EvalResult] = []
+    associations: dict[Path, OriginalRuleAssociation] = {}
+    if eval_cfg.validate_original:
+        original_paths = list(
+            dict.fromkeys(_find_yar_files(eval_cfg.original_directories))
+        )
+        associations = _associate_original_rules(rule_paths, original_paths)
 
     def _process(idx: int, rp: Path) -> EvalResult:
-        result = _run_one(rp, eval_cfg)
+        association = associations.get(rp)
+        oracle = "original" if eval_cfg.validate_original else "normalized"
+        source = (
+            str(association.path)
+            if association is not None and association.path is not None
+            else ("<unavailable>" if eval_cfg.validate_original else str(rp))
+        )
+        print(
+            f"[{idx}/{total}] oracle={oracle} normalized={rp} source={source}",
+            file=sys.stderr,
+            flush=True,
+        )
+        result = _run_one(rp, eval_cfg, association)
         print(
             f"[{idx}/{total}] {rp} → {result.status}",
-            file=__import__("sys").stderr,
+            file=sys.stderr,
             flush=True,
         )
         return result
@@ -440,6 +665,8 @@ def _write_report(results: list[EvalResult], eval_cfg: EvalConfig, run_ts: str) 
                 "extract_reasoning_effort": eval_cfg.extract_reasoning_effort,
                 "use_structured_output": eval_cfg.use_structured_output,
                 "scan_only": eval_cfg.scan_only,
+                "validate_original": eval_cfg.validate_original,
+                "original_directories": eval_cfg.original_directories,
                 "workers": eval_cfg.workers,
             },
         },
@@ -522,6 +749,10 @@ def _build_eval_config(args: argparse.Namespace, file_cfg: dict) -> EvalConfig:
         directories = list(args.dirs)
     else:
         directories = ev.get("directories", [])
+    if args.original_directories:
+        original_directories = list(args.original_directories)
+    else:
+        original_directories = ev.get("original_directories", [])
 
     # Resolve each source completely before falling back to the next one. This
     # lets the batch config override even role-specific variables from .env.
@@ -611,6 +842,11 @@ def _build_eval_config(args: argparse.Namespace, file_cfg: dict) -> EvalConfig:
 
     # Boolean / integer flags: CLI > config file > default
     scan_only = args.scan_only or ev.get("scan_only", False)
+    validate_original = (
+        args.validate_original
+        if args.validate_original is not None
+        else ev.get("validate_original", False)
+    )
     no_stream = args.no_stream or ev.get("no_stream", False)
     workers = args.workers if args.workers is not None else ev.get("workers", 1)
     output = args.output or ev.get("output") or None
@@ -628,6 +864,8 @@ def _build_eval_config(args: argparse.Namespace, file_cfg: dict) -> EvalConfig:
 
     return EvalConfig(
         directories=directories,
+        original_directories=original_directories,
+        validate_original=validate_original,
         model=default_model,
         normalize_model=normalize_model,
         extract_model=extract_model,
@@ -677,6 +915,26 @@ def parse_args(argv: list[str] | None = None) -> argparse.Namespace:
         default=None,
         metavar="N",
         help="Parallel workers (default: 1).",
+    )
+    parser.add_argument(
+        "--validate-original",
+        action=argparse.BooleanOptionalAction,
+        default=None,
+        help=(
+            "Validate each artifact with its associated original rule; "
+            "--no-validate-original overrides an enabled config value."
+        ),
+    )
+    parser.add_argument(
+        "--original-directory",
+        action="append",
+        dest="original_directories",
+        default=None,
+        metavar="PATH",
+        help=(
+            "Original YARA corpus directory. Repeat to provide multiple roots; "
+            "overrides original_directories in the config file."
+        ),
     )
     parser.add_argument(
         "--output",
@@ -779,11 +1037,7 @@ def parse_args(argv: list[str] | None = None) -> argparse.Namespace:
         default=False,
         help="Disable streaming for the extract nodes only.",
     )
-    args_to_parse = sys.argv[1:] if argv is None else argv
-    if not args_to_parse:
-        parser.print_help()
-        raise SystemExit(0)
-    return parser.parse_args(args_to_parse)
+    return parser.parse_args(sys.argv[1:] if argv is None else argv)
 
 
 def main() -> None:
@@ -815,6 +1069,11 @@ def main() -> None:
     print(f"Found {len(rule_paths)} rule(s) to evaluate.")
     print(f"Models: normalize={normalize_model}  extract={extract_model}")
     print(f"Base URLs: normalize={normalize_base_url or 'default'}  extract={extract_base_url or 'default'}")
+    if eval_cfg.validate_original:
+        roots = ", ".join(eval_cfg.original_directories) or "none configured"
+        print(f"Validation oracle: original rules ({roots})")
+    else:
+        print("Validation oracle: normalized rules")
     results = run_evaluation(rule_paths, eval_cfg)
     _write_report(results, eval_cfg, run_ts)
     _print_summary(results)

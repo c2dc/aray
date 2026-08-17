@@ -2,7 +2,7 @@
 
 All notable changes to this project will be documented in this file.
 
-## [Unreleased]
+## [0.10.0] - 2026-08-17
 
 ### Added
 
@@ -12,6 +12,8 @@ All notable changes to this project will be documented in this file.
 - **Capability preflight** (`aray/capabilities.py`, `aray/nodes.py`, `aray/graph.py`): runs after normalization/judging and before extraction to classify unsupported `pe.*` and `math.*` conditions, infeasible prescribed whole-file hash preimages, unsatisfiable integer values, and a missing PE32 compiler.
 - **Signed and PE32 integer support** (`aray/yara_extraction.py`, `aray/compiler.py`, `aray/artifact_writer.py`): adds deterministic `int16` handling and narrow `uint16(uint32(0x3c)+delta)` PE32 checks with `i686-w64-mingw32-gcc` selection.
 - **Evaluation dispositions and provenance** (`aray/evaluator.py`): reports per-rule semantic dispositions, failure categories, normalization/extraction paths, and actual LLM use alongside status and YARA results, with aggregate counts; API keys are not serialized.
+- **Original-rule evaluation oracle** (`aray/evaluator.py`): adds `--validate-original`, configurable original corpus roots, strict path/name association, standalone dependency selection, identifier-restricted YARA scans, and per-rule oracle/source provenance in progress output.
+- **Automatic batch configuration** (`aray/evaluator.py`, `aray/normalizer.py`): argument-free `aray-eval` and `aray-normalize` runs now load `.evaluator` and `.normalizer` from the current directory; `--config` remains available for custom paths.
 
 ### Changed
 
@@ -20,7 +22,7 @@ All notable changes to this project will be documented in this file.
 - **Compact and modifier-aware construction** (`aray/codegen.py`, `aray/compiler.py`): emits byte-exact UTF-8/UTF-16LE witnesses, respects `ascii wide`, `fullword`, `nocase`, match counts and ranges, packs runnable ELF files, and selects the low-alignment PE backend for tight filesize constraints.
 - **Format routing and constants** (`aray/nodes.py`, `aray/compiler.py`, `aray/artifact_writer.py`): recognizes native PE/ELF magic, lets fixed non-PE headers and low ranged placements override wide/MZ hints when a generic scanner blob is the feasible path, and writes `uint16be`/`uint32be` values using their declared byte order.
 - **PE routing boundary** (`aray/capabilities.py`, `aray/nodes.py`): YARA module `pe.*` references no longer act as format evidence; only native byte-level structural checks can select the PE backend.
-- **CI MinGW coverage** (`.github/workflows/ci.yml`): installs `gcc-mingw-w64-i686` alongside the x86-64 toolchain for PE32 integration coverage.
+- **CI corpus and MinGW coverage** (`.github/workflows/ci.yml`): checks out the pinned Yara-Rules corpus only inside the test job and installs `gcc-mingw-w64-i686` alongside the x86-64 toolchain for PE32 integration coverage.
 
 ### Fixed
 
@@ -31,9 +33,10 @@ All notable changes to this project will be documented in this file.
 
 ### Documentation
 
-- **Deterministic corpus validation** (`README.md`, `docs/site/`): publishes the August 15 full-compile result over 416 normalized Yara-Rules inputs at 406/416 matches (97.6%). All 406 rules that reached extraction used deterministic string and constant extraction; the other 10 stopped at preflight, and no rule invoked an LLM.
+- **Deterministic corpus validation** (`README.md`, `docs/site/`): publishes the August 15 full-compile-mode realization result over 416 outputs previously accepted by Aray's normalization workflow, at 406/416 matches (97.6%). ELF and PE routes used compiler backends while generic routes remained direct writers. All 406 rules that reached extraction used deterministic string and constant extraction; the other 10 stopped at preflight, and no model was invoked during realization.
 - **Failure accounting** (`README.md`, `docs/site/evaluation.md`): records seven unsupported `pe.*` cases, two infeasible whole-file hash preimages, and one unsatisfiable integer value. Both MinGW architectures were installed, so `RAT_FlyingKitten` and `packer_compiler_signatures` now pass.
-- **Evaluation provenance** (`aray/evaluator.py`, `docs/site/assets/yara-rules-416-deterministic.json`): records normalization and extraction paths per rule, aggregates actual LLM use, and publishes a machine-readable summary. Previous pipeline experiments and provider comparisons were removed; normalization experiments remain preserved.
+- **Evaluation provenance** (`aray/evaluator.py`, `docs/site/assets/yara-rules-416-deterministic.json`): records normalization and extraction paths per rule, aggregates actual LLM use, and publishes a machine-readable summary. Previous pipeline experiments and provider comparisons were removed; normalization reports and outputs remain preserved in the local evaluation workspace but are not versioned.
+- **Research paper** (`docs/paper/`): adds the paper source, bibliography, generated figures, and publication-ready PDF describing Aray's architecture and evaluation.
 
 ## [0.9.0] - 2026-08-05
 

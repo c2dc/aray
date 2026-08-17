@@ -262,6 +262,100 @@ def test_does_not_canonicalize_regex_witness_back_to_regex():
     assert validate_normalization(original, candidate) is None
 
 
+@pytest.mark.parametrize("regex", ["/^foo$/", "/^foo/", "/foo$/"])
+def test_rejects_regex_witness_that_requires_an_unpreserved_boundary(regex):
+    original = f'rule R {{ strings: $a = {regex} condition: $a }}'
+    normalized = 'rule R { strings: $a = "foo" condition: $a }'
+
+    error = validate_normalization(original, normalized)
+
+    assert "Regex witness validation failed for $a" in error
+    assert "every placement allowed" in error
+
+
+def test_accepts_start_anchored_regex_with_required_zero_offset():
+    original = 'rule R { strings: $a = /^foo/ condition: $a }'
+    normalized = 'rule R { strings: $a = "foo" condition: $a at 0 }'
+
+    assert validate_normalization(original, normalized) is None
+
+
+def test_rejects_end_anchor_even_when_start_offset_is_preserved():
+    original = 'rule R { strings: $a = /^foo$/ condition: $a }'
+    normalized = 'rule R { strings: $a = "foo" condition: $a at 0 }'
+
+    assert "Regex witness validation failed for $a" in validate_normalization(
+        original, normalized
+    )
+
+
+def test_prefers_unanchored_regex_alternative_for_embedded_witness():
+    original = r'rule R { strings: $a = /(\.py$|Python)/ condition: $a }'
+    anchored = 'rule R { strings: $a = ".py" condition: $a }'
+    unanchored = 'rule R { strings: $a = "Python" condition: $a }'
+
+    assert "Regex witness validation failed for $a" in validate_normalization(
+        original, anchored
+    )
+    assert validate_normalization(original, unanchored) is None
+
+
+def test_rejects_wide_regex_witness_with_unpreserved_anchors():
+    original = 'rule R { strings: $a = /^Try Run$/ wide condition: $a }'
+    normalized = 'rule R { strings: $a = "Try Run" wide condition: $a }'
+
+    assert "Regex witness validation failed for $a" in validate_normalization(
+        original, normalized
+    )
+
+
+def test_anchored_regex_failure_prevents_deterministic_count_proof():
+    original = '''rule R {
+strings:
+    $a = /^foo$/
+    $b = "bar"
+condition:
+    all of them
+}'''
+    normalized = '''rule R {
+strings:
+    $a = "foo"
+    $b = "bar"
+condition:
+    $a and $b
+}'''
+
+    assert validate_normalization(original, normalized) is not None
+    assert normalization_is_proven(original, normalized) is False
+
+
+def test_start_anchored_fixture_remains_valid_with_at_zero():
+    original = select_yara_file(
+        Path("evaluation/yara-repos/rules/webshells/WShell_PHP_in_images.yar")
+    ).text
+    normalized = Path(
+        "evaluation/normalized-glm-5.2-stable/webshells/WShell_PHP_in_images.yar"
+    ).read_text()
+
+    assert validate_normalization(original, normalized) is None
+
+
+@pytest.mark.parametrize(
+    "relative_path",
+    ["malware/MALW_AlMashreq.yar", "malware/RAT_PoetRATDoc.yar"],
+)
+def test_repaired_anchored_regex_fixtures_are_proven(relative_path):
+    original = select_yara_file(
+        Path("evaluation/yara-repos/rules") / relative_path
+    ).text
+    normalized = (
+        Path("evaluation/normalized-glm-5.2-stable") / relative_path
+    ).read_text()
+
+    assert validate_normalization(original, normalized) is None
+    assert normalization_is_proven(original, normalized) is True
+
+
 def test_does_not_guess_witness_for_complex_hex_alternative():
     original = 'rule R { strings: $a = { ( 01 | 02 ) [2] FF } condition: $a }'
     normalized = 'rule R { strings: $a = { 02 00 00 FF } condition: $a }'
