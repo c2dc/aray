@@ -200,12 +200,18 @@ class TestE2EPE:
         assert "maindll_mutex" in result.stdout
 
     def test_rule9_wide_strings_match(self, tmp_path):
-        """rule9: deterministic extraction finds ASCII and wide strings."""
-        rule = RULES_DIR / "rule9.yar"
+        """Deterministic extraction finds and embeds a wide string."""
+        rule = tmp_path / "wide.yar"
+        rule.write_text('''rule Wide {
+strings:
+    $wide = "wide marker" wide
+condition:
+    uint16(0) == 0x5A4D and $wide
+}''')
         _, win_dir = _invoke(rule, tmp_path)
         result = _yara_scan(rule, win_dir / "app.exe")
         assert result.returncode == 0
-        assert "malware_apt15_exchange_tool" in result.stdout
+        assert "Wide" in result.stdout
 
     def test_pe_binary_structure(self, tmp_path):
         """Generated PE binary has valid MZ header and PE signature at e_lfanew."""

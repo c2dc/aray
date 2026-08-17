@@ -30,6 +30,7 @@ All notable changes to this project will be documented in this file.
 - **Normalization regressions** (`tests/test_yara_validation.py`): covers long repeated literals, escaped values, model-induced type changes, fixed hex changes, exact and ranged jumps, partial wildcards, and complex patterns that must not be guessed.
 - **Fullword boundaries** (`aray/codegen.py`): reserves zero-valued boundaries around `fullword` witnesses so neighboring generated data cannot extend the matched word.
 - **Nested PE-relative comparisons** (`aray/compiler.py`): patches supported nested constants relative to the generated PE's actual `e_lfanew` target instead of treating the source pointer offset as the final patch location.
+- **Self-contained deterministic tests** (`tests/test_e2e.py`, `tests/test_yara_validation.py`): keeps normalized candidates inline, removes dependencies on ignored evaluation reports and generated corpora, and uses a deterministic wide-string fixture instead of making an unmarked model call.
 
 ### Documentation
 

@@ -1,4 +1,3 @@
-import json
 from pathlib import Path
 
 import pytest
@@ -73,9 +72,14 @@ condition:
 
 def test_cve_2018_20250_candidate_is_valid():
     original = Path("evaluation/yara-repos/rules/cve_rules/CVE-2018-20250.yar").read_text()
-    normalized = Path(
-        "evaluation/normalized-glm-5.2-stable/cve_rules/CVE-2018-20250.yar"
-    ).read_text()
+    normalized = '''rule CVE_2018_20250 {
+strings:
+    $string1 = "**ACE**" ascii wide
+    $string2 = "*UNREGISTERED VERSION*" ascii wide
+    $hexstring1 = { 00 3A 5C 00 3A 5C }
+condition:
+    $string1 at 7 and $string2 at 31 and $hexstring1
+}'''
     assert validate_normalization(original, normalized) is None
     assert normalization_is_proven(original, normalized) is True
 
@@ -91,9 +95,31 @@ def test_bleedinglife_17_of_18_candidate_is_valid():
     original = Path(
         "evaluation/yara-repos/rules/exploit_kits/EK_BleedingLife.yar"
     ).read_text()
-    normalized = Path(
-        "evaluation/normalized-glm-5.2-stable/exploit_kits/EK_BleedingLife.yar"
-    ).read_text()
+    normalized = '''rule bleedinglife2_adobe_2010_1297_exploit {
+strings:
+    $string0 = "getSharedStyle"
+    $string1 = "currentCount"
+    $string2 = "String"
+    $string3 = "setSelection"
+    $string4 = "BOTTOM"
+    $string5 = "classToInstancesDict"
+    $string6 = "buttonDown"
+    $string7 = "focusRect"
+    $string8 = "pill11"
+    $string9 = "TEXT_INPUT"
+    $string10 = "restrict"
+    $string11 = "defaultButtonEnabled"
+    $string12 = "copyStylesToChild"
+    $string13 = " xmlns:xmpMM"
+    $string14 = "_editable"
+    $string16 = "IMEConversionMode"
+    $string17 = "Scene 1"
+condition:
+    $string0 and $string1 and $string2 and $string3 and $string4 and
+    $string5 and $string6 and $string7 and $string8 and $string9 and
+    $string10 and $string11 and $string12 and $string13 and $string14 and
+    $string16 and $string17
+}'''
     # The frozen candidate retains exactly the selected 17 declarations.
     assert validate_normalization(original, normalized) is None
     assert normalization_is_proven(original, normalized) is True
@@ -333,24 +359,62 @@ def test_start_anchored_fixture_remains_valid_with_at_zero():
     original = select_yara_file(
         Path("evaluation/yara-repos/rules/webshells/WShell_PHP_in_images.yar")
     ).text
-    normalized = Path(
-        "evaluation/normalized-glm-5.2-stable/webshells/WShell_PHP_in_images.yar"
-    ).read_text()
+    normalized = '''rule php_in_image {
+strings:
+    $gif = "GIF87a"
+    $php_tag = "<?php"
+condition:
+    $gif at 0 and $php_tag
+}'''
 
     assert validate_normalization(original, normalized) is None
 
 
 @pytest.mark.parametrize(
-    "relative_path",
-    ["malware/MALW_AlMashreq.yar", "malware/RAT_PoetRATDoc.yar"],
+    ("relative_path", "normalized"),
+    [
+        (
+            "malware/MALW_AlMashreq.yar",
+            '''rule almashreq_agent_dotnet {
+strings:
+    $s01 = "WriteElementString(@\\"PCName\\"," wide
+    $s02 = "WriteElementString(@\\"Command\\"," wide
+    $s03 = "WriteElementStringRaw(@\\"commandID\\"," wide
+    $s05 = " is running in PC :" wide
+    $s07 = "Try Run</obj><name>" wide
+    $s08 = "Disable</obj><name>" wide
+    $s09 = "http://tempuri.org/" wide
+condition:
+    $s01 and $s02 and $s03 and $s05 and $s07 and $s08 and $s09
+}''',
+        ),
+        (
+            "malware/RAT_PoetRATDoc.yar",
+            '''rule PoetRat_Doc {
+strings:
+    $pythonRegEx = "Python"
+    $pythonFile1 = "launcher.py"
+    $zipFile = "smile.zip"
+    $pythonFile2 = "smile_funs.py"
+    $pythonFile3 = "frown.py"
+    $pythonFile4 = "backer.py"
+    $pythonFile5 = "smile.py"
+    $pythonFile6 = "affine.py"
+    $dlls = ".dll"
+    $cmd = "cmd"
+    $exe = ".exe"
+condition:
+    $pythonRegEx and $pythonFile1 and $zipFile and $pythonFile2 and
+    $pythonFile3 and $pythonFile4 and $pythonFile5 and $pythonFile6 and
+    $dlls and $cmd and $exe
+}''',
+        ),
+    ],
 )
-def test_repaired_anchored_regex_fixtures_are_proven(relative_path):
+def test_repaired_anchored_regex_fixtures_are_proven(relative_path, normalized):
     original = select_yara_file(
         Path("evaluation/yara-repos/rules") / relative_path
     ).text
-    normalized = (
-        Path("evaluation/normalized-glm-5.2-stable") / relative_path
-    ).read_text()
 
     assert validate_normalization(original, normalized) is None
     assert normalization_is_proven(original, normalized) is True
@@ -502,25 +566,76 @@ condition:
 
 
 @pytest.mark.parametrize(
-    "rule_name",
+    ("relative_path", "candidate"),
     [
-        "malware_red_leaves_generic",
-        "MW_neuron2_loader_strings",
-        "FUDCrypter",
-        "MSILStealer",
-        "Maze",
+        (
+            "malware/APT_RedLeaves.yar",
+            '''rule malware_red_leaves_generic {
+strings:
+    $__aray_anon_1 = "Feb 04 2015"
+    $__aray_anon_2 = "I can not start %s"
+    $__aray_anon_3 = "dwConnectPort" fullword
+    $__aray_anon_4 = "dwRemoteLanPort" fullword
+    $__aray_anon_5 = "strRemoteLanAddress" fullword
+    $__aray_anon_6 = "strLocalConnectIp" fullword
+    $__aray_anon_14 = "__upt" wide
+condition:
+    $__aray_anon_1 and $__aray_anon_2 and $__aray_anon_3 and
+    $__aray_anon_4 and $__aray_anon_5 and $__aray_anon_6 and $__aray_anon_14
+}''',
+        ),
+        (
+            "malware/APT_Turla_Neuron.yar",
+            '''rule MW_neuron2_loader_strings {
+strings:
+    $__aray_anon_1 = "dcom_api" ascii
+    $__aray_anon_5 = "dcomnet.dll" ascii
+condition:
+    uint16(0) == 0x5A4D and uint16(uint32(0x3c)) == 0x4550 and
+    $__aray_anon_1 and $__aray_anon_5
+}''',
+        ),
+        (
+            "malware/MALW_FUDCrypt.yar",
+            '''rule FUDCrypter {
+strings:
+    $__aray_anon_1 = "OcYjzPUtJkNbLOABqYvNbvhZf" wide ascii
+condition:
+    $__aray_anon_1
+}''',
+        ),
+        (
+            "malware/MALW_MSILStealer.yar",
+            r'''rule MSILStealer {
+strings:
+    $__aray_anon_4 = "{0}\\\\FileZilla\\\\recentservers.xml" wide ascii
+condition:
+    $__aray_anon_4
+}''',
+        ),
+        (
+            "malware/RANSOM_Maze.yar",
+            '''rule Maze {
+strings:
+    $__aray_anon_1 = "Enc: %s" ascii wide
+    $__aray_anon_5 = "--logging" ascii wide
+    $__aray_anon_6 = "--nomutex" ascii wide
+    $__aray_anon_7 = "--noshares" ascii wide
+    $__aray_anon_8 = "--path" ascii wide
+condition:
+    $__aray_anon_1 and $__aray_anon_5 and $__aray_anon_6 and
+    $__aray_anon_7 and $__aray_anon_8
+}''',
+        ),
     ],
 )
-def test_second_glm_round_anonymous_failures_are_canonicalized(rule_name):
-    report = json.loads(
-        Path(
-            "evaluation/reports/2026-08-12T19-30-54-glm-5.2/"
-            "norm_report.json"
-        ).read_text()
-    )
-    result = next(item for item in report["results"] if item["rule_name"] == rule_name)
-    original = select_yara_file(Path(result["rule_path"])).text
-    candidate = canonicalize_normalization(original, result["normalized_rule"])
+def test_second_glm_round_anonymous_failures_are_canonicalized(
+    relative_path, candidate
+):
+    original = select_yara_file(
+        Path("evaluation/yara-repos/rules") / relative_path
+    ).text
+    candidate = canonicalize_normalization(original, candidate)
     assert validate_normalization(original, candidate) is None
 
 
