@@ -11,9 +11,9 @@ license = "Apache-2.0"
 license-files = ["LICENSE", "NOTICE"]
 dependencies = [
     "ipython>=9.10.0",
-    "langchain-openai>=1.1.7",
-    "langgraph>=1.0.8",
-    "python-dotenv>=1.0.0",
+    "langchain-openai>=1.6.0",
+    "langgraph>=1.2.11",
+    "python-dotenv>=1.2.3",
     "yara-python>=4.5.0",
 ]
 
