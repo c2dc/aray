@@ -12,7 +12,7 @@ license-files = ["LICENSE", "NOTICE"]
 dependencies = [
     "ipython>=9.10.0",
     "langchain-openai>=1.1.7",
-    "langgraph>=1.0.8",
+    "langgraph>=1.2.14",
     "python-dotenv>=1.0.0",
     "yara-python>=4.5.0",
 ]
